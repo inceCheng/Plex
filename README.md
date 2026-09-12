@@ -83,6 +83,8 @@ Sidecar 由 Rust 拉起，优先使用 `src-tauri/binaries/plex-agent-<target-tr
 - 添加自定义供应商：填写名称、Base URL、API Key，拉取 `/models` 列表后选择模型。
 - 服务不提供 `/models` 时，可以手动添加模型 ID。
 
+设置页默认只显示“外观”和“供应商”两个一级入口。供应商列表处于折叠状态，点击“供应商”后才会展开目录、搜索、Key 配置和自定义供应商表单。
+
 OpenAI 使用 Responses API；OpenAI-compatible 供应商使用 Chat Completions。Provider、模型和思考强度的完整说明见 `docs/models-and-providers.md`。
 
 自定义供应商配置保存在应用数据目录；Key 保存在 macOS 钥匙串。模型请求直接发送到用户填写的 Base URL。

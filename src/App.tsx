@@ -414,6 +414,7 @@ export default function App() {
   const [catalogSource, setCatalogSource] = useState("cache");
   const [fetchedAtUnix, setFetchedAtUnix] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [prompt, setPrompt] = useState("");
   const [selection, setSelection] = useState<ModelSelection | null>(null);
@@ -692,6 +693,7 @@ export default function App() {
           : String(submitError);
       setError(message);
       if (message.includes("MISSING_API_KEY")) {
+        setProvidersOpen(true);
         setSettingsOpen(true);
       }
     } finally {
@@ -935,6 +937,8 @@ export default function App() {
         <ProviderSettings
           theme={theme}
           onThemeChange={setTheme}
+          providersOpen={providersOpen}
+          onProvidersOpenChange={setProvidersOpen}
           providers={providers}
           customProviders={customProviders}
           keyStates={keyStates}

@@ -47,6 +47,8 @@ function sourceLabel(source: string | null): string {
 export function ProviderSettings(props: {
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  providersOpen: boolean;
+  onProvidersOpenChange: (open: boolean) => void;
   providers: CatalogProvider[];
   customProviders: CustomProviderConfig[];
   keyStates: Record<string, ProviderKeyState>;
@@ -74,6 +76,13 @@ export function ProviderSettings(props: {
   const [customBusy, setCustomBusy] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
   const [manualModel, setManualModel] = useState("");
+
+  const configuredCount = props.providers.filter(
+    (provider) => props.keyStates[provider.id]?.configured,
+  ).length;
+  const supportedCount = props.providers.filter(
+    (provider) => provider.supported,
+  ).length;
 
   const providers = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -281,28 +290,58 @@ export function ProviderSettings(props: {
           </div>
         </section>
 
-        <div className="settings-toolbar">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索供应商"
-          />
-          <span className="catalog-meta">
-            {props.catalogSource === "network" ? "已更新" : "本地缓存"}
-            {props.fetchedAtUnix > 0
-              ? ` · ${new Date(props.fetchedAtUnix * 1000).toLocaleString("zh-CN")}`
-              : ""}
+        <section
+          className="provider-settings-row is-clickable"
+          role="button"
+          tabIndex={0}
+          onClick={() =>
+            props.onProvidersOpenChange(!props.providersOpen)
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              props.onProvidersOpenChange(!props.providersOpen);
+            }
+          }}
+        >
+          <div>
+            <strong>供应商</strong>
+            <p>
+              {configuredCount} 个已配置 · {supportedCount} 个可用
+              {props.customProviders.length > 0
+                ? ` · ${props.customProviders.length} 个自定义`
+                : ""}
+            </p>
+          </div>
+          <span className="ghost small">
+            {props.providersOpen ? "收起" : "管理"}
           </span>
-          <button className="ghost" onClick={() => void props.onRefresh()}>
-            刷新目录
-          </button>
-          <button className="primary" onClick={openNewCustom}>
-            ＋ 自定义供应商
-          </button>
-        </div>
+        </section>
 
-        {customDraft ? (
-          <section className="custom-provider-form">
+        {props.providersOpen ? (
+          <>
+            <div className="settings-toolbar">
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索供应商"
+              />
+              <span className="catalog-meta">
+                {props.catalogSource === "network" ? "已更新" : "本地缓存"}
+                {props.fetchedAtUnix > 0
+                  ? ` · ${new Date(props.fetchedAtUnix * 1000).toLocaleString("zh-CN")}`
+                  : ""}
+              </span>
+              <button className="ghost" onClick={() => void props.onRefresh()}>
+                刷新目录
+              </button>
+              <button className="primary" onClick={openNewCustom}>
+                ＋ 自定义供应商
+              </button>
+            </div>
+
+            {customDraft ? (
+              <section className="custom-provider-form">
             <header>
               <strong>
                 {customDraft.id ? "编辑自定义供应商" : "添加自定义供应商"}
@@ -429,11 +468,11 @@ export function ProviderSettings(props: {
                 保存供应商
               </button>
             </div>
-          </section>
-        ) : null}
+              </section>
+            ) : null}
 
-        <div className="provider-list">
-          {providers.map((provider) => {
+            <div className="provider-list">
+              {providers.map((provider) => {
             const keyState = props.keyStates[provider.id];
             const configured = keyState?.configured ?? false;
             const isEditing = editing === provider.id;
@@ -548,8 +587,10 @@ export function ProviderSettings(props: {
                 ) : null}
               </article>
             );
-          })}
-        </div>
+              })}
+            </div>
+          </>
+        ) : null}
       </section>
     </div>
   );

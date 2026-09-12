@@ -30,6 +30,7 @@
 - 已实现 React 界面：Codex 风格布局、默认白色主题与黑色主题切换、任务列表、新建任务、目录选择、模型供应商选择、思考强度选择、流式回复、工具记录、审批 diff、取消与历史查看。
 - 已接入 models.dev：缓存供应商与模型目录，支持 OpenAI Responses、OpenAI-compatible Chat Completions 与本地服务；专用协议供应商显示不可用原因。
 - 已支持自定义供应商：用户配置名称、Base URL、Key，拉取 `/models` 列表后选择模型，也可以手动添加模型 ID。
+- 设置页中的供应商区域与“外观”同级，默认折叠，点击后展开完整供应商列表。
 - 已实现多供应商密钥配置：每个供应商独立保存到 macOS 钥匙串，Rust 在启动任务时读取并仅通过 Sidecar stdin 传递。
 - Sidecar 使用 `bun build --compile` 生成 `src-tauri/binaries/plex-agent-<target-triple>`，Tauri 通过 `externalBin` 打包。
 - 本机 macOS 26.6、arm64、Bun 1.3.13、Rust 1.98、Xcode 26.5 环境验证通过。
