@@ -86,6 +86,15 @@ describe("compiled sidecar acceptance", () => {
             prompt:
               "阅读这个目录里的资料，整理一份项目概览和待办清单，写入 summary.md",
             workspace: workspacePath,
+            provider: {
+              id: "openrouter",
+              name: "OpenRouter",
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiStyle: "chat_completions",
+              modelId: "deepseek/deepseek-chat",
+              reasoningEffort: "high",
+              apiKey: "",
+            },
           },
         });
         const start = await client.waitFor(
@@ -133,8 +142,18 @@ describe("compiled sidecar acceptance", () => {
         const detail = await client.waitFor(
           (message) => message.id === "detail-1",
         );
-        const task = detail.payload?.task as { status: string } | undefined;
+        const task = detail.payload?.task as
+          | {
+              status: string;
+              providerId: string | null;
+              providerName: string | null;
+              reasoningEffort: string | null;
+            }
+          | undefined;
         expect(task?.status).toBe("completed");
+        expect(task?.providerId).toBe("openrouter");
+        expect(task?.providerName).toBe("OpenRouter");
+        expect(task?.reasoningEffort).toBe("high");
       } finally {
         await client.stop();
         await rm(root, { recursive: true, force: true });

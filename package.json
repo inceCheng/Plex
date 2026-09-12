@@ -11,10 +11,10 @@
     "check:web": "tsc -p tsconfig.json --noEmit",
     "check:sidecar": "tsc -p tsconfig.sidecar.json --noEmit",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
-    "test": "bun test sidecar/tests",
+    "test": "bun test sidecar/tests src/tests",
     "sidecar:dev": "bun run sidecar/src/main.ts",
     "sidecar:build": "bun run scripts/build-sidecar.ts",
-    "verify": "bun run sidecar:build && bun run check && bun test sidecar/tests && bun run check:rust",
+    "verify": "bun run sidecar:build && bun run check && bun test sidecar/tests src/tests && bun run check:rust",
     "tauri": "tauri"
   },
   "dependencies": {

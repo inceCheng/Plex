@@ -17,6 +17,9 @@ interface TaskRow {
   prompt: string;
   workspace: string;
   model: string;
+  provider_id: string | null;
+  provider_name: string | null;
+  reasoning_effort: string | null;
   status: TaskStatus;
   final_output: string | null;
   error: string | null;
@@ -92,6 +95,9 @@ function mapTask(row: TaskRow): TaskRecord {
     prompt: row.prompt,
     workspace: row.workspace,
     model: row.model,
+    providerId: row.provider_id,
+    providerName: row.provider_name,
+    reasoningEffort: row.reasoning_effort,
     status: row.status,
     finalOutput: row.final_output,
     error: row.error,
@@ -174,6 +180,9 @@ export class PlexDatabase {
         prompt TEXT NOT NULL,
         workspace TEXT NOT NULL,
         model TEXT NOT NULL,
+        provider_id TEXT,
+        provider_name TEXT,
+        reasoning_effort TEXT,
         status TEXT NOT NULL,
         final_output TEXT,
         error TEXT,
@@ -229,6 +238,20 @@ export class PlexDatabase {
       CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, seq);
       CREATE INDEX IF NOT EXISTS idx_approvals_task_id ON approvals(task_id, created_at);
     `);
+
+    this.ensureColumn("tasks", "provider_id", "TEXT");
+    this.ensureColumn("tasks", "provider_name", "TEXT");
+    this.ensureColumn("tasks", "reasoning_effort", "TEXT");
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.db
+      .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+      .all();
+    if (columns.some((entry) => entry.name === column)) {
+      return;
+    }
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   createTask(input: {
@@ -237,13 +260,17 @@ export class PlexDatabase {
     prompt: string;
     workspace: string;
     model: string;
+    providerId?: string | null;
+    providerName?: string | null;
+    reasoningEffort?: string | null;
   }): TaskRecord {
     const timestamp = now();
     this.db
       .query(
         `INSERT INTO tasks
-          (id, title, prompt, workspace, model, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+          (id, title, prompt, workspace, model, provider_id, provider_name,
+           reasoning_effort, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .run(
         input.id,
@@ -251,6 +278,9 @@ export class PlexDatabase {
         input.prompt,
         input.workspace,
         input.model,
+        input.providerId ?? null,
+        input.providerName ?? null,
+        input.reasoningEffort ?? null,
         timestamp,
         timestamp,
       );

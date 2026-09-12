@@ -20,6 +20,8 @@
 - Sidecar 启动时把 `pending`、`running`、`awaiting_approval` 状态的任务标记为 `interrupted`。
 - `sidecar/src/agent.ts` 使用 OpenAI Agents SDK 的 `run(..., { stream: true })`，消费 `output_text_delta` 事件，并处理 `interruptions`、`state.approve()` 与 `state.reject()`。
 - 任务取消通过 `AbortController` 传递给 SDK；等待审批时取消会立即完成状态转换，并标记未决审批为 `cancelled`。
+- `ProviderRuntimeConfig` 支持按任务传入供应商、Base URL、协议、模型与思考强度；OpenAI 走 Responses，兼容供应商走 Chat Completions。
+- 任务表新增 `provider_id`、`provider_name`、`reasoning_effort`，历史界面可以显示供应商与强度。
 
 ### 文件工具
 
@@ -35,18 +37,30 @@
 - `src-tauri/src/lib.rs` 管理 Sidecar 生命周期，读取 stdout 并按行解析 JSON，通过 `sidecar-event` 事件转发给前端。
 - Sidecar 优先使用编译二进制，回退到 `bun run sidecar/src/main.ts`。
 - 数据库位于 Tauri 应用数据目录的 `plex.sqlite`。
-- macOS 使用 `security` 命令读写钥匙串，服务名为 `com.plex.desktop.openai`。
-- 支持设置或删除 API Key 后重启 Sidecar。
+- `models_catalog` 下载并缓存 models.dev 目录，缓存有效期 24 小时，网络失败时回退本地缓存。
+- macOS 使用 `security` 命令读写钥匙串，服务名为 `com.plex.desktop.provider`，账号为供应商 ID。
+- `provider_key_status` 检查环境变量、钥匙串和本地服务；`save_provider_key` 与 `delete_provider_key` 管理单个供应商。
+- `start_task` 在 Rust 侧解析 Key，构建 Sidecar 请求并注入密钥，密钥不经过前端持久化。
 - 应用退出时终止 Sidecar 子进程。
 
 ### React 界面
 
+- Codex 风格深色布局：左侧任务列表，中间对话与工具记录，底部任务输入框。
 - 任务列表与历史记录。
-- 新建任务：目录选择、目标描述、模型覆盖。
+- 新建任务：目录选择、目标描述、模型供应商与模型选择、思考强度选择。
 - 流式文本、工具执行卡片、失败信息。
 - 写入审批卡片展示 unified diff，支持批准与拒绝。
 - 运行中任务支持取消。
-- 设置页展示 API Key、Sidecar 状态、数据库位置、Sidecar 命令和最近日志。
+- 模型选择器支持供应商搜索、模型搜索、工具调用能力过滤与思考强度按钮。
+- 设置页按供应商管理 Key，展示目录来源、更新时间、支持状态和不可用原因。
+
+### 模型供应商
+
+- `src/catalog.ts` 解析 models.dev 目录，支持 OpenAI、OpenAI-compatible 与 OpenRouter。
+- 模型列表过滤掉 `tool_call == false` 的条目，避免选择无法驱动 Agent 循环的模型。
+- 思考强度读取 `reasoning_options` 中的 `effort.values`，默认优先 `medium`。
+- 专用协议供应商（Anthropic、Google、Bedrock 等）显示为不可用，并给出原因。
+- 详细协议和边界见 `docs/models-and-providers.md`。
 
 ## 验证结果
 
@@ -61,18 +75,21 @@ bun run tauri dev
 验证内容：
 
 - TypeScript 前端与 Sidecar 类型检查通过。
-- 13 项 Bun 测试通过，42 个断言。
+- 16 项 Bun 测试通过，59 个断言。
 - `cargo check` 通过。
+- `cargo test --lib` 通过 2 项本地测试；`models_dev_is_reachable` 网络测试手动执行通过。
 - Tauri debug 无打包构建成功，产物为 `src-tauri/target/debug/plex`。
 - 开发态启动时，主进程成功拉起 `plex-agent-aarch64-apple-darwin`；退出后两个进程都已清理。
+- 开发态启动时成功拉取 models.dev，缓存文件约 4.4 MB，包含 213 个供应商。
 - 编译后的 Sidecar 可独立启动，通过 `ping` 返回版本与数据库信息。
-- 二进制验收测试在编译后的 Sidecar 中完成 `list_directory`、两次 `read_text_file`、`write_text_file` 审批与写入，最终 `summary.md` 内容正确，任务状态为 `completed`。
+- 二进制验收测试在编译后的 Sidecar 中完成供应商字段传递、`list_directory`、两次 `read_text_file`、`write_text_file` 审批与写入，最终 `summary.md` 内容正确，任务状态为 `completed`。
 
 验收测试使用 `PLEX_TEST_MODEL_SCRIPT` 注入 ScriptedModel，覆盖 SDK Agent 循环、流式运行、工具调用与审批恢复，不依赖外部网络。该变量仅用于测试。
 
 ## 尚未验证
 
 - 真实 OpenAI 模型调用：本机未配置 `OPENAI_API_KEY`。
+- 真实第三方供应商调用：尚未使用 OpenRouter、DeepSeek 等账号实测。
 - 真实网络请求下的取消时延与 SDK 重试行为。
 - 应用重启后恢复审批暂停点。当前仅保留历史记录并将未完成任务标记为 `interrupted`。
 - `tauri build` 生成 DMG/APP 安装包、签名与公证。
@@ -86,3 +103,5 @@ bun run tauri dev
 - API Key 通过 `security` 命令行参数写入钥匙串，短暂出现在子进程参数中；后续可以改成更严格的原生 Keychain API。
 - 前端历史回放以事件流为准，未对大量事件做虚拟滚动。
 - 首个版本只允许写入已存在的目录，不自动创建中间目录。
+- 供应商支持范围目前为 OpenAI 与 OpenAI-compatible。专用协议供应商需要后续适配器。
+- `budget_tokens` 思考预算和供应商自定义参数尚未进入界面。

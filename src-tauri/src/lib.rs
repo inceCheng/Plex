@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -6,11 +6,11 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const KEYCHAIN_SERVICE: &str = "com.plex.desktop.openai";
-const KEYCHAIN_ACCOUNT: &str = "default";
+const PROVIDER_KEYCHAIN_SERVICE: &str = "com.plex.desktop.provider";
+const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
 struct SidecarProcess {
     child: Child,
@@ -70,14 +70,14 @@ struct SidecarStatus {
 }
 
 #[cfg(target_os = "macos")]
-fn read_keychain_api_key() -> Option<String> {
+fn keychain_key(service: &str, account: &str) -> Option<String> {
     let output = Command::new("security")
         .args([
             "find-generic-password",
             "-s",
-            KEYCHAIN_SERVICE,
+            service,
             "-a",
-            KEYCHAIN_ACCOUNT,
+            account,
             "-w",
         ])
         .output()
@@ -94,15 +94,73 @@ fn read_keychain_api_key() -> Option<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn read_keychain_api_key() -> Option<String> {
+fn keychain_key(_service: &str, _account: &str) -> Option<String> {
     None
+}
+
+#[cfg(target_os = "macos")]
+fn write_keychain_key(service: &str, account: &str, key: &str) -> Result<(), String> {
+    let status = Command::new("security")
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            service,
+            "-a",
+            account,
+            "-w",
+            key,
+        ])
+        .status()
+        .map_err(|error| format!("无法调用 macOS 钥匙串：{error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("写入 macOS 钥匙串失败".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_keychain_key(_service: &str, _account: &str, _key: &str) -> Result<(), String> {
+    Err("当前平台尚未实现钥匙串写入，请使用环境变量".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn delete_keychain_key(service: &str, account: &str) -> Result<(), String> {
+    let output = Command::new("security")
+        .args([
+            "delete-generic-password",
+            "-s",
+            service,
+            "-a",
+            account,
+        ])
+        .output()
+        .map_err(|error| format!("无法调用 macOS 钥匙串：{error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("could not be found")
+        || stderr.contains("The specified item could not be found")
+    {
+        Ok(())
+    } else {
+        Err(format!("删除 macOS 钥匙串条目失败：{stderr}"))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_keychain_key(_service: &str, _account: &str) -> Result<(), String> {
+    Ok(())
 }
 
 fn configured_api_key() -> Option<String> {
     std::env::var("OPENAI_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(read_keychain_api_key)
+        .or_else(|| keychain_key(PROVIDER_KEYCHAIN_SERVICE, "openai"))
+        .or_else(|| keychain_key("com.plex.desktop.openai", "default"))
 }
 
 fn project_root() -> PathBuf {
@@ -427,60 +485,293 @@ fn sidecar_status(
     })
 }
 
-#[cfg(target_os = "macos")]
-fn write_keychain_api_key(key: &str) -> Result<(), String> {
-    let status = Command::new("security")
-        .args([
-            "add-generic-password",
-            "-U",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            KEYCHAIN_ACCOUNT,
-            "-w",
-            key,
-        ])
-        .status()
-        .map_err(|error| format!("无法调用 macOS 钥匙串：{error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("写入 macOS 钥匙串失败".to_string())
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogResponse {
+    source: String,
+    fetched_at_unix: u64,
+    catalog: Value,
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn read_cached_catalog(path: &PathBuf) -> Option<CatalogResponse> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let catalog: Value = serde_json::from_str(&text).ok()?;
+    let fetched_at_unix = std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    Some(CatalogResponse {
+        source: "cache".to_string(),
+        fetched_at_unix,
+        catalog,
+    })
+}
+
+#[tauri::command]
+async fn models_catalog(
+    app: AppHandle,
+    force_refresh: Option<bool>,
+) -> Result<CatalogResponse, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("无法创建应用数据目录：{error}"))?;
+    let cache_path = data_dir.join("models.dev.json");
+    let force = force_refresh.unwrap_or(false);
+
+    if !force {
+        if let Some(cached) = read_cached_catalog(&cache_path) {
+            if unix_now().saturating_sub(cached.fetched_at_unix) < 24 * 60 * 60 {
+                return Ok(cached);
+            }
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .user_agent("Plex/0.1.0")
+        .build()
+        .map_err(|error| format!("创建模型目录客户端失败：{error}"))?;
+
+    match client.get(MODELS_DEV_URL).send().await {
+        Ok(response) if response.status().is_success() => {
+            let text = response
+                .text()
+                .await
+                .map_err(|error| format!("读取 models.dev 响应失败：{error}"))?;
+            let catalog: Value = serde_json::from_str(&text)
+                .map_err(|error| format!("解析 models.dev 响应失败：{error}"))?;
+            std::fs::write(&cache_path, &text)
+                .map_err(|error| format!("缓存 models.dev 响应失败：{error}"))?;
+            Ok(CatalogResponse {
+                source: "network".to_string(),
+                fetched_at_unix: unix_now(),
+                catalog,
+            })
+        }
+        Ok(response) => {
+            if let Some(cached) = read_cached_catalog(&cache_path) {
+                Ok(cached)
+            } else {
+                Err(format!(
+                    "models.dev 返回 {}，且本地没有缓存",
+                    response.status()
+                ))
+            }
+        }
+        Err(error) => {
+            if let Some(cached) = read_cached_catalog(&cache_path) {
+                Ok(cached)
+            } else {
+                Err(format!("无法访问 models.dev：{error}"))
+            }
+        }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn write_keychain_api_key(_key: &str) -> Result<(), String> {
-    Err("当前平台尚未实现钥匙串写入，请使用 OPENAI_API_KEY 环境变量".to_string())
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderKeyCheck {
+    id: String,
+    #[serde(default)]
+    env_names: Vec<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    local: Option<bool>,
 }
 
-#[cfg(target_os = "macos")]
-fn delete_keychain_api_key() -> Result<(), String> {
-    let output = Command::new("security")
-        .args([
-            "delete-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            KEYCHAIN_ACCOUNT,
-        ])
-        .output()
-        .map_err(|error| format!("无法调用 macOS 钥匙串：{error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("could not be found") || stderr.contains("The specified item could not be found")
-    {
-        Ok(())
-    } else {
-        Err(format!("删除 macOS 钥匙串条目失败：{stderr}"))
-    }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderKeyStatus {
+    provider_id: String,
+    configured: bool,
+    source: Option<String>,
 }
 
-#[cfg(not(target_os = "macos"))]
-fn delete_keychain_api_key() -> Result<(), String> {
-    Ok(())
+fn provider_is_local(provider_id: &str, base_url: Option<&str>, local: Option<bool>) -> bool {
+    if local.unwrap_or(false) {
+        return true;
+    }
+    if provider_id == "lmstudio" {
+        return true;
+    }
+    base_url
+        .map(|value| value.contains("127.0.0.1") || value.contains("localhost"))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn provider_key_status(providers: Vec<ProviderKeyCheck>) -> Vec<ProviderKeyStatus> {
+    providers
+        .into_iter()
+        .map(|provider| {
+            for env_name in &provider.env_names {
+                if std::env::var(env_name)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false)
+                {
+                    return ProviderKeyStatus {
+                        provider_id: provider.id,
+                        configured: true,
+                        source: Some("environment".to_string()),
+                    };
+                }
+            }
+            if keychain_key(PROVIDER_KEYCHAIN_SERVICE, &provider.id).is_some() {
+                return ProviderKeyStatus {
+                    provider_id: provider.id,
+                    configured: true,
+                    source: Some("keychain".to_string()),
+                };
+            }
+            if provider.id == "openai"
+                && keychain_key("com.plex.desktop.openai", "default").is_some()
+            {
+                return ProviderKeyStatus {
+                    provider_id: provider.id,
+                    configured: true,
+                    source: Some("keychain".to_string()),
+                };
+            }
+            if provider_is_local(
+                &provider.id,
+                provider.base_url.as_deref(),
+                provider.local,
+            ) {
+                return ProviderKeyStatus {
+                    provider_id: provider.id,
+                    configured: true,
+                    source: Some("local".to_string()),
+                };
+            }
+            ProviderKeyStatus {
+                provider_id: provider.id,
+                configured: false,
+                source: None,
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn save_provider_key(provider_id: String, key: String) -> Result<(), String> {
+    let provider_id = provider_id.trim();
+    let key = key.trim();
+    if provider_id.is_empty() {
+        return Err("供应商 ID 不能为空".to_string());
+    }
+    if key.is_empty() {
+        return Err("API Key 不能为空".to_string());
+    }
+    write_keychain_key(PROVIDER_KEYCHAIN_SERVICE, provider_id, key)
+}
+
+#[tauri::command]
+fn delete_provider_key(provider_id: String) -> Result<(), String> {
+    delete_keychain_key(PROVIDER_KEYCHAIN_SERVICE, provider_id.trim())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderConfigPayload {
+    id: String,
+    name: String,
+    base_url: String,
+    #[serde(default)]
+    api_style: String,
+    model_id: String,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    env_names: Vec<String>,
+    #[serde(default)]
+    local: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartTaskPayload {
+    prompt: String,
+    workspace: String,
+    provider: ProviderConfigPayload,
+}
+
+fn resolve_provider_key(provider: &ProviderConfigPayload) -> Result<String, String> {
+    for env_name in &provider.env_names {
+        if let Ok(value) = std::env::var(env_name) {
+            if !value.trim().is_empty() {
+                return Ok(value);
+            }
+        }
+    }
+    if let Some(key) = keychain_key(PROVIDER_KEYCHAIN_SERVICE, &provider.id) {
+        return Ok(key);
+    }
+    if provider.id == "openai" {
+        if let Some(key) = keychain_key("com.plex.desktop.openai", "default") {
+            return Ok(key);
+        }
+    }
+    if provider_is_local(
+        &provider.id,
+        Some(&provider.base_url),
+        provider.local,
+    ) {
+        return Ok("local".to_string());
+    }
+    Err(format!(
+        "MISSING_API_KEY:请先在设置中为 {} 配置 API Key",
+        provider.name
+    ))
+}
+
+#[tauri::command]
+fn start_task(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    payload: StartTaskPayload,
+) -> Result<Value, String> {
+    if payload.prompt.trim().is_empty() {
+        return Err("任务目标不能为空".to_string());
+    }
+    if payload.workspace.trim().is_empty() {
+        return Err("工作目录不能为空".to_string());
+    }
+
+    let api_key = resolve_provider_key(&payload.provider)?;
+    ensure_sidecar(&app, state.inner())?;
+    let request_id = format!("ui-{}", unix_now());
+    let request = serde_json::json!({
+        "id": request_id,
+        "type": "start_task",
+        "payload": {
+            "prompt": payload.prompt,
+            "workspace": payload.workspace,
+            "provider": {
+                "id": payload.provider.id,
+                "name": payload.provider.name,
+                "baseUrl": payload.provider.base_url,
+                "apiStyle": payload.provider.api_style,
+                "modelId": payload.provider.model_id,
+                "reasoningEffort": payload.provider.reasoning_effort,
+                "apiKey": api_key,
+            }
+        }
+    });
+    send_sidecar_request(state.inner(), &request)?;
+    Ok(serde_json::json!({ "sent": true }))
 }
 
 #[tauri::command]
@@ -489,11 +780,7 @@ fn save_api_key(
     state: State<'_, SidecarState>,
     key: String,
 ) -> Result<(), String> {
-    let trimmed = key.trim();
-    if trimmed.is_empty() {
-        return Err("API Key 不能为空".to_string());
-    }
-    write_keychain_api_key(trimmed)?;
+    save_provider_key("openai".to_string(), key)?;
     start_sidecar(&app, state.inner())
 }
 
@@ -502,7 +789,7 @@ fn delete_api_key(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<(), String> {
-    delete_keychain_api_key()?;
+    delete_provider_key("openai".to_string())?;
     start_sidecar(&app, state.inner())
 }
 
@@ -522,10 +809,74 @@ pub fn run() {
             sidecar_stop,
             sidecar_send,
             sidecar_status,
+            models_catalog,
+            provider_key_status,
+            save_provider_key,
+            delete_provider_key,
+            start_task,
             save_api_key,
             delete_api_key,
             restart_sidecar
         ])
         .run(tauri::generate_context!())
         .expect("error while running Plex");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_local_providers() {
+        assert!(provider_is_local("lmstudio", None, None));
+        assert!(provider_is_local(
+            "custom",
+            Some("http://127.0.0.1:1234/v1"),
+            None
+        ));
+        assert!(!provider_is_local(
+            "openrouter",
+            Some("https://openrouter.ai/api/v1"),
+            None
+        ));
+    }
+
+    #[test]
+    fn resolves_provider_key_from_local_endpoint() {
+        let provider = ProviderConfigPayload {
+            id: "lmstudio".to_string(),
+            name: "LMStudio".to_string(),
+            base_url: "http://127.0.0.1:1234/v1".to_string(),
+            api_style: "chat_completions".to_string(),
+            model_id: "local-model".to_string(),
+            reasoning_effort: None,
+            env_names: vec![],
+            local: Some(true),
+        };
+        assert_eq!(resolve_provider_key(&provider).unwrap(), "local");
+    }
+
+    #[test]
+    #[ignore = "requires network access to models.dev"]
+    fn models_dev_is_reachable() {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .user_agent("Plex/0.1.0-test")
+            .build()
+            .unwrap();
+        let text = tauri::async_runtime::block_on(async {
+            client
+                .get(MODELS_DEV_URL)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+        assert!(text.contains("\"openai\""));
+        assert!(text.len() > 1_000_000);
+    }
 }

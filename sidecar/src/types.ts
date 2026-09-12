@@ -13,6 +13,9 @@ export interface TaskRecord {
   prompt: string;
   workspace: string;
   model: string;
+  providerId: string | null;
+  providerName: string | null;
+  reasoningEffort: string | null;
   status: TaskStatus;
   finalOutput: string | null;
   error: string | null;

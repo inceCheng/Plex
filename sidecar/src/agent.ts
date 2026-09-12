@@ -1,7 +1,9 @@
 import {
   Agent,
+  OpenAIProvider,
   run,
   type Model,
+  type ModelSettings,
   type RunState,
   type RunToolApprovalItem,
 } from "@openai/agents";
@@ -30,10 +32,21 @@ export class TaskFailureError extends Error {
   }
 }
 
+export interface ProviderRuntimeConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiStyle: "responses" | "chat_completions";
+  modelId: string;
+  reasoningEffort?: string | null;
+  apiKey: string;
+}
+
 export interface StartTaskInput {
   prompt: string;
   workspace: string;
   model?: string;
+  provider?: ProviderRuntimeConfig;
 }
 
 export interface TaskRunnerOptions {
@@ -150,16 +163,26 @@ export class TaskRunner {
     }
 
     const workspace = await resolveWorkspace(input.workspace);
-    const model =
+    const provider = input.provider;
+    const fallbackModel =
       input.model?.trim() ||
       process.env.PLEX_MODEL?.trim() ||
       DEFAULT_MODEL;
+    const usesInjectedModel =
+      Boolean(this.createModel) || Boolean(process.env.PLEX_TEST_MODEL_SCRIPT);
+    const providerModel =
+      provider && !usesInjectedModel
+        ? await this.createProviderModel(provider)
+        : undefined;
     const task = this.db.createTask({
       id: crypto.randomUUID(),
       title: createTitle(prompt),
       prompt,
       workspace,
-      model,
+      model: provider ? `${provider.id}/${provider.modelId}` : fallbackModel,
+      providerId: provider?.id ?? null,
+      providerName: provider?.name ?? null,
+      reasoningEffort: provider?.reasoningEffort ?? null,
     });
     this.db.addMessage(task.id, "user", prompt);
     this.emit(task.id, "task.created", {
@@ -167,6 +190,9 @@ export class TaskRunner {
       title: task.title,
       workspace: task.workspace,
       model: task.model,
+      providerId: task.providerId,
+      providerName: task.providerName,
+      reasoningEffort: task.reasoningEffort,
       status: task.status,
     });
 
@@ -179,13 +205,26 @@ export class TaskRunner {
       emit: (type, data) => this.emit(task.id, type, data),
       pendingWrites: new Map(),
     };
+    const injectedModel =
+      this.createModel?.(task) ?? createTestModelFromEnvironment();
+    const agentModel =
+      injectedModel ??
+      providerModel ??
+      task.model;
+    const modelSettings: ModelSettings | undefined = provider?.reasoningEffort
+      ? {
+          reasoning: {
+            effort: provider.reasoningEffort as NonNullable<
+              ModelSettings["reasoning"]
+            >["effort"],
+          },
+        }
+      : undefined;
     const agent = new Agent({
       name: "Plex",
       instructions: systemInstructions(task),
-      model:
-        this.createModel?.(task) ??
-        createTestModelFromEnvironment() ??
-        task.model,
+      model: agentModel,
+      modelSettings,
       tools: createTaskTools(runtime),
     });
     const execution: TaskExecution = {
@@ -203,6 +242,29 @@ export class TaskRunner {
 
     const done = this.executeStart(execution);
     return { taskId: task.id, done };
+  }
+
+  private async createProviderModel(
+    provider: ProviderRuntimeConfig,
+  ): Promise<Model> {
+    const apiKey = provider.apiKey.trim();
+    const local =
+      provider.id === "lmstudio" ||
+      provider.baseUrl.includes("127.0.0.1") ||
+      provider.baseUrl.includes("localhost");
+    if (!apiKey && !local) {
+      throw new TaskFailureError(
+        "MISSING_API_KEY",
+        `请先为 ${provider.name} 配置 API Key`,
+      );
+    }
+
+    const openAIProvider = new OpenAIProvider({
+      apiKey: apiKey || "local",
+      baseURL: provider.baseUrl.trim() || "https://api.openai.com/v1",
+      useResponses: provider.apiStyle === "responses",
+    });
+    return openAIProvider.getModel(provider.modelId);
   }
 
   async approve(
@@ -259,6 +321,7 @@ export class TaskRunner {
       const hasApiKey =
         Boolean(this.createModel) ||
         Boolean(process.env.PLEX_TEST_MODEL_SCRIPT) ||
+        Boolean(execution.task.providerId) ||
         Boolean(process.env.OPENAI_API_KEY);
       if (!hasApiKey) {
         throw new TaskFailureError(

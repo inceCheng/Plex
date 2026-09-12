@@ -26,13 +26,17 @@
 - 已完成 Tauri 2 + React 19 + TypeScript 工程初始化，依赖和脚本由 Bun 管理，`bun.lock` 已生成。
 - 已实现 Bun Sidecar：JSONL 协议、SQLite 持久化、OpenAI Agents SDK 运行循环、流式事件、工具审批、取消与中断标记。
 - 已实现首批文件工具：`list_directory`、`search_text`、`read_text_file`、`write_text_file`。
-- 已实现 Rust 宿主：Sidecar 进程管理、stdio JSON 转发、事件推送、macOS 钥匙串读写与应用退出清理。
-- 已实现 React 界面：任务列表、新建任务、目录选择、流式回复、工具记录、审批 diff、取消、历史查看与设置。
+- 已实现 Rust 宿主：Sidecar 进程管理、stdio JSON 转发、事件推送、models.dev 目录缓存、多供应商钥匙串读写与应用退出清理。
+- 已实现 React 界面：Codex 风格深色布局、任务列表、新建任务、目录选择、模型供应商选择、思考强度选择、流式回复、工具记录、审批 diff、取消与历史查看。
+- 已接入 models.dev：缓存供应商与模型目录，支持 OpenAI Responses、OpenAI-compatible Chat Completions 与本地服务；专用协议供应商显示不可用原因。
+- 已实现多供应商密钥配置：每个供应商独立保存到 macOS 钥匙串，Rust 在启动任务时读取并仅通过 Sidecar stdin 传递。
 - Sidecar 使用 `bun build --compile` 生成 `src-tauri/binaries/plex-agent-<target-triple>`，Tauri 通过 `externalBin` 打包。
 - 本机 macOS 26.6、arm64、Bun 1.3.13、Rust 1.98、Xcode 26.5 环境验证通过。
-- `bun run verify` 已通过：前端与 Sidecar 类型检查、13 项 Bun 测试、`cargo check`。
+- `bun run verify` 已通过：前端与 Sidecar 类型检查、16 项 Bun 测试、`cargo check`。
+- `cargo test --lib` 的 2 项本地测试通过；models.dev 网络测试已单独执行通过。
 - `bun run tauri build --debug --no-bundle` 已通过，产物为 `src-tauri/target/debug/plex`。
 - `bun run tauri dev` 已验证主进程能够拉起编译后的 Sidecar，退出后两个进程都被清理。
+- 开发态启动时成功从 models.dev 拉取目录，缓存约 4.4 MB、213 个供应商。
 - 编译后的 Sidecar 已通过二进制验收测试：多步读取、写入审批、批准后写入 `summary.md`、历史查询全部成功。
 - 本机没有配置 `OPENAI_API_KEY`，真实模型调用、真实网络取消和真实模型下的拒绝分支尚未验证。
 - 生成安装包、签名、公证、Windows 与 Linux 分发尚未验证。
@@ -50,7 +54,7 @@
 - 通信链路：前端 WebView → Tauri Rust IPC → Bun Sidecar → 模型 API / 工具 / 存储；事件沿原链路返回。
 - Sidecar 协议、模型配置、密钥保存与数据库结构已有首版实现，后续变更需要同步更新 `docs/implementation-status.md`。
 
-原型暂按 macOS、个人使用、用户自带 API Key 推进。Key 保存于 macOS 钥匙串，服务名为 `com.plex.desktop.openai`。
+原型暂按 macOS、个人使用、用户自带 API Key 推进。Key 按供应商保存于 macOS 钥匙串，服务名为 `com.plex.desktop.provider`，账号为供应商 ID。
 
 ## Bun 工具链与打包约定
 
@@ -83,6 +87,8 @@
 - SDK 的运行状态与会话支持仍需结合应用实现任务持久化、幂等和崩溃恢复。
 - 云模型调用需要联网，发送给模型的文件内容可能离开本机。
 - OpenAI Agents SDK 官方接口已在 2026-09-12 核对：`run`、function tools、`stream: true`、`needsApproval`、`interruptions`、`state.approve()` 与 `state.reject()`。
+- 供应商适配边界：OpenAI 使用 Responses；`@ai-sdk/openai-compatible` 与 OpenRouter 使用 Chat Completions；Anthropic、Google、Bedrock 等专用协议暂不接入。
+- 思考强度来自 models.dev 的 `reasoning_options.effort.values`，写入 SDK 的 `modelSettings.reasoning.effort`。
 
 ## 首个验收场景
 
@@ -94,17 +100,19 @@
 
 ## 下一步
 
-1. 配置真实 API Key 并运行首个完整模型验收，核对流式输出、工具调用、审批恢复与最终回答。
-2. 验证真实网络请求下的取消行为、错误重试和超时处理。
-3. 实现审批暂停状态的持久化与自动恢复，替换当前仅标记中断的行为。
-4. 生成并验证 macOS 安装包，补齐签名、公证和首次启动说明。
-5. 按产品路线进入第二阶段：受约束的命令执行、网页检索与 MCP 工具接入。
+1. 配置真实 OpenAI 或 OpenRouter API Key，运行首个完整模型验收，核对流式输出、工具调用、审批恢复与最终回答。
+2. 验证第三方供应商的工具调用兼容性、思考强度参数和错误处理。
+3. 验证真实网络请求下的取消行为、错误重试和超时处理。
+4. 实现审批暂停状态的持久化与自动恢复，替换当前仅标记中断的行为。
+5. 生成并验证 macOS 安装包，补齐签名、公证和首次启动说明。
+6. 按产品路线进入第二阶段：受约束的命令执行、网页检索与 MCP 工具接入。
 
 ## 文档入口
 
 - `AGENTS.md`：当前项目记忆与协作约定。
 - `docs/product-scope.md`：产品范围、能力路线、设计边界和验收条件。
 - `docs/implementation-status.md`：已实现内容、验证命令、测试证据和未验证边界。
+- `docs/models-and-providers.md`：models.dev、供应商协议、密钥与思考强度说明。
 - `README.md`：开发命令、目录结构和运行说明。
 
 历史交接文件位于系统临时目录，其关键上下文已整理到项目文档中；后续接续无需依赖该临时文件。

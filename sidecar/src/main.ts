@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { TaskRunner, TaskFailureError } from "./agent.ts";
+import {
+  TaskRunner,
+  TaskFailureError,
+  type ProviderRuntimeConfig,
+} from "./agent.ts";
 import { PlexDatabase } from "./db.ts";
 import type {
   ProtocolResponse,
@@ -64,6 +68,33 @@ function optionalString(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function parseProvider(
+  payload: Record<string, unknown>,
+): ProviderRuntimeConfig | undefined {
+  const value = payload.provider;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TaskFailureError(
+      "INVALID_ARGUMENT",
+      "provider 参数必须是对象",
+    );
+  }
+  const provider = value as Record<string, unknown>;
+  const apiStyle =
+    provider.apiStyle === "responses" ? "responses" : "chat_completions";
+  return {
+    id: requireString(provider, "id"),
+    name: requireString(provider, "name"),
+    baseUrl: requireString(provider, "baseUrl"),
+    apiStyle,
+    modelId: requireString(provider, "modelId"),
+    reasoningEffort: optionalString(provider, "reasoningEffort") ?? null,
+    apiKey: optionalString(provider, "apiKey") ?? "",
+  };
+}
+
 const dbPath =
   process.env.PLEX_DB_PATH ?? join(process.cwd(), "data", "plex.sqlite");
 const db = new PlexDatabase(dbPath);
@@ -103,10 +134,12 @@ async function handleRequest(
       const prompt = requireString(payload, "prompt");
       const workspaceInput = requireString(payload, "workspace");
       const model = optionalString(payload, "model");
+      const provider = parseProvider(payload);
       const started = await runner.startTask({
         prompt,
         workspace: workspaceInput,
         model,
+        provider,
       });
       void started.done.catch((error: unknown) => {
         log(

@@ -103,13 +103,47 @@ export class SidecarClient {
   async startTask(input: {
     prompt: string;
     workspace: string;
-    model?: string;
-  }): Promise<string> {
-    const payload = await this.request<{ taskId: string }>(
-      "start_task",
-      input,
-    );
-    return payload.taskId;
+    provider: {
+      id: string;
+      name: string;
+      baseUrl: string;
+      apiStyle: "responses" | "chat_completions";
+      modelId: string;
+      reasoningEffort: string | null;
+      envNames: string[];
+      local: boolean;
+    };
+  }): Promise<void> {
+    await invoke("start_task", { payload: input });
+  }
+
+  async modelsCatalog(forceRefresh = false): Promise<{
+    source: "network" | "cache";
+    fetchedAtUnix: number;
+    catalog: unknown;
+  }> {
+    return invoke("models_catalog", { forceRefresh });
+  }
+
+  async providerKeyStatus(
+    providers: Array<{
+      id: string;
+      envNames: string[];
+      baseUrl: string | null;
+      local: boolean;
+    }>,
+  ): Promise<
+    Array<{ providerId: string; configured: boolean; source: string | null }>
+  > {
+    return invoke("provider_key_status", { providers });
+  }
+
+  async saveProviderKey(providerId: string, key: string): Promise<void> {
+    await invoke("save_provider_key", { providerId, key });
+  }
+
+  async deleteProviderKey(providerId: string): Promise<void> {
+    await invoke("delete_provider_key", { providerId });
   }
 
   async approve(taskId: string, callId: string): Promise<void> {
