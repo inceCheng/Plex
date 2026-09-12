@@ -5,6 +5,7 @@ import {
   findProvider,
   type CatalogProvider,
 } from "../catalog";
+import type { ProviderKeyState } from "./ProviderSettings";
 
 export interface ModelSelection {
   providerId: string;
@@ -27,6 +28,7 @@ function formatContext(tokens: number | null): string {
 
 export function ModelPicker(props: {
   providers: CatalogProvider[];
+  keyStates: Record<string, ProviderKeyState>;
   value: ModelSelection | null;
   onChange: (value: ModelSelection) => void;
 }) {
@@ -34,37 +36,48 @@ export function ModelPicker(props: {
   const [providerQuery, setProviderQuery] = useState("");
   const [modelQuery, setModelQuery] = useState("");
 
-  const selectedProvider = findProvider(
+  const selectableProviders = useMemo(
+    () =>
+      props.providers.filter(
+        (provider) =>
+          provider.supported &&
+          (provider.source === "custom" ||
+            props.keyStates[provider.id]?.configured === true),
+      ),
+    [props.providers, props.keyStates],
+  );
+
+  const selectedProviderCandidate = findProvider(
     props.providers,
     props.value?.providerId ?? "",
   );
+  const selectedProvider = selectedProviderCandidate && selectableProviders.some(
+    (provider) => provider.id === selectedProviderCandidate.id,
+  )
+    ? selectedProviderCandidate
+    : undefined;
   const selectedModel = findModel(
     selectedProvider,
     props.value?.modelId ?? "",
   );
 
-  const supportedProviders = useMemo(
-    () => props.providers.filter((provider) => provider.supported),
-    [props.providers],
-  );
-
   const activeProviderId =
-    props.value?.providerId ?? supportedProviders[0]?.id ?? "";
+    selectedProvider?.id ?? selectableProviders[0]?.id ?? "";
   const activeProvider = findProvider(props.providers, activeProviderId);
 
   const filteredProviders = useMemo(() => {
     const query = providerQuery.trim().toLocaleLowerCase();
     if (query.length === 0) {
-      return props.providers.slice(0, 120);
+      return selectableProviders.slice(0, 120);
     }
-    return props.providers
+    return selectableProviders
       .filter(
         (provider) =>
           provider.name.toLocaleLowerCase().includes(query) ||
           provider.id.toLocaleLowerCase().includes(query),
       )
       .slice(0, 120);
-  }, [props.providers, providerQuery]);
+  }, [selectableProviders, providerQuery]);
 
   const filteredModels = useMemo(() => {
     if (!activeProvider) {
@@ -127,7 +140,9 @@ export function ModelPicker(props: {
             ) : null}
           </>
         ) : (
-          <span className="picker-placeholder">选择模型</span>
+          <span className="picker-placeholder">
+            {selectableProviders.length > 0 ? "选择模型" : "请先配置供应商"}
+          </span>
         )}
         <span className="picker-chevron">⌄</span>
       </button>
@@ -163,6 +178,13 @@ export function ModelPicker(props: {
                     </span>
                   </button>
                 ))}
+                {filteredProviders.length === 0 ? (
+                  <p className="picker-empty">
+                    {selectableProviders.length === 0
+                      ? "请先在设置中配置 API Key"
+                      : "没有匹配的供应商"}
+                  </p>
+                ) : null}
               </div>
             </div>
 

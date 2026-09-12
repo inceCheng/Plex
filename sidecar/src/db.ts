@@ -9,6 +9,7 @@ import type {
   TaskRecord,
   TaskStatus,
   ToolCallRecord,
+  ProjectRecord,
 } from "./types.ts";
 
 interface TaskRow {
@@ -16,6 +17,7 @@ interface TaskRow {
   title: string;
   prompt: string;
   workspace: string;
+  project_id: string | null;
   model: string;
   provider_id: string | null;
   provider_name: string | null;
@@ -23,6 +25,14 @@ interface TaskRow {
   status: TaskStatus;
   final_output: string | null;
   error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  workspace: string;
   created_at: string;
   updated_at: string;
 }
@@ -94,6 +104,7 @@ function mapTask(row: TaskRow): TaskRecord {
     title: row.title,
     prompt: row.prompt,
     workspace: row.workspace,
+    projectId: row.project_id,
     model: row.model,
     providerId: row.provider_id,
     providerName: row.provider_name,
@@ -101,6 +112,16 @@ function mapTask(row: TaskRow): TaskRecord {
     status: row.status,
     finalOutput: row.final_output,
     error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapProject(row: ProjectRow): ProjectRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    workspace: row.workspace,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -174,11 +195,20 @@ export class PlexDatabase {
 
   private migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        workspace TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         prompt TEXT NOT NULL,
         workspace TEXT NOT NULL,
+        project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
         model TEXT NOT NULL,
         provider_id TEXT,
         provider_name TEXT,
@@ -242,6 +272,8 @@ export class PlexDatabase {
     this.ensureColumn("tasks", "provider_id", "TEXT");
     this.ensureColumn("tasks", "provider_name", "TEXT");
     this.ensureColumn("tasks", "reasoning_effort", "TEXT");
+    this.ensureColumn("tasks", "project_id", "TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id, updated_at DESC);");
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -259,6 +291,7 @@ export class PlexDatabase {
     title: string;
     prompt: string;
     workspace: string;
+    projectId?: string | null;
     model: string;
     providerId?: string | null;
     providerName?: string | null;
@@ -269,8 +302,8 @@ export class PlexDatabase {
       .query(
         `INSERT INTO tasks
           (id, title, prompt, workspace, model, provider_id, provider_name,
-           reasoning_effort, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+           reasoning_effort, project_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .run(
         input.id,
@@ -281,10 +314,36 @@ export class PlexDatabase {
         input.providerId ?? null,
         input.providerName ?? null,
         input.reasoningEffort ?? null,
+        input.projectId ?? null,
         timestamp,
         timestamp,
       );
     return this.getTask(input.id);
+  }
+
+  createProject(input: { id: string; name: string; workspace: string }): ProjectRecord {
+    const timestamp = now();
+    this.db.query(`INSERT INTO projects (id, name, workspace, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`).run(
+      input.id, input.name, input.workspace, timestamp, timestamp,
+    );
+    return this.getProject(input.id);
+  }
+
+  getProject(projectId: string): ProjectRecord {
+    const row = this.db.query<ProjectRow, [string]>("SELECT * FROM projects WHERE id = ?").get(projectId);
+    if (!row) throw new Error(`项目不存在：${projectId}`);
+    return mapProject(row);
+  }
+
+  listProjects(): ProjectRecord[] {
+    return this.db.query<ProjectRow, []>("SELECT * FROM projects ORDER BY updated_at DESC").all().map(mapProject);
+  }
+
+  deleteProject(projectId: string): void {
+    this.db.transaction(() => {
+      this.db.query("UPDATE tasks SET project_id = NULL, updated_at = ? WHERE project_id = ?").run(now(), projectId);
+      this.db.query("DELETE FROM projects WHERE id = ?").run(projectId);
+    })();
   }
 
   getTask(taskId: string): TaskRecord {

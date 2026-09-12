@@ -5,6 +5,8 @@ import type {
   SidecarStatus,
   TaskDetail,
   TaskRecord,
+  ProjectRecord,
+  SkillRecord,
 } from "./types";
 import type {
   CustomProviderConfig,
@@ -100,13 +102,31 @@ export class SidecarClient {
     return payload.tasks;
   }
 
+  async listProjects(): Promise<ProjectRecord[]> {
+    const payload = await this.request<{ projects: ProjectRecord[] }>("list_projects");
+    return payload.projects;
+  }
+
+  async createProject(name: string, workspace: string): Promise<ProjectRecord> {
+    return this.request<ProjectRecord>("create_project", { name, workspace });
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    await this.request("delete_project", { projectId });
+  }
+
   async getTask(taskId: string): Promise<TaskDetail> {
     return this.request<TaskDetail>("get_task", { taskId });
   }
 
+  async continueTask(taskId: string, prompt: string): Promise<void> {
+    await invoke("continue_task", { taskId, prompt });
+  }
+
   async startTask(input: {
     prompt: string;
-    workspace: string;
+    workspace?: string;
+    projectId?: string | null;
     provider: {
       id: string;
       name: string;
@@ -174,6 +194,29 @@ export class SidecarClient {
       providerId: input.providerId,
       apiKey: input.apiKey,
     });
+  }
+
+  async listSkills(): Promise<SkillRecord[]> {
+    return invoke("list_skills");
+  }
+
+  async importSkill(sourcePath: string): Promise<SkillRecord> {
+    return invoke("import_skill", { sourcePath });
+  }
+
+  async setSkillEnabled(skillId: string, enabled: boolean): Promise<SkillRecord> {
+    return invoke("set_skill_enabled", { skillId, enabled });
+  }
+
+  async updateSkill(input: {
+    skillId: string;
+    content: string;
+  }): Promise<SkillRecord> {
+    return invoke("update_skill", input);
+  }
+
+  async deleteSkill(skillId: string): Promise<void> {
+    await invoke("delete_skill", { skillId });
   }
 
   async approve(taskId: string, callId: string): Promise<void> {

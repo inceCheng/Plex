@@ -4,8 +4,9 @@ import {
   assistantMessage,
   functionCall,
 } from "@openai/agents/testing";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { ProtocolEvent, TaskDetail } from "../src/types.ts";
+import type { ProtocolEvent, SkillContext, TaskDetail } from "../src/types.ts";
 import { createHarness, type TestHarness } from "./helpers.ts";
 
 const harnesses: TestHarness[] = [];
@@ -37,6 +38,142 @@ function currentDetail(harness: TestHarness, taskId: string): TaskDetail {
 }
 
 describe("TaskRunner", () => {
+  test("独立会话可以按需读取已启用 Skill 的登记资源", async () => {
+    const model = new ScriptedModel([
+      [
+        functionCall(
+          "read_skill_resource",
+          { skillId: "skill:test-skill", path: "references/guide.md" },
+          { callId: "call-skill-resource" },
+        ),
+      ],
+      [assistantMessage("已按 Skill 指引完成回答。")],
+    ]);
+    const harness = await createHarness(model);
+    harnesses.push(harness);
+    const skillRoot = join(harness.root, "skills", "test-skill");
+    const content = "按参考资料中的格式整理结果。";
+    await mkdir(join(skillRoot, "references"), { recursive: true });
+    await Bun.write(join(skillRoot, "references", "guide.md"), content);
+    const skills: SkillContext[] = [{
+      id: "skill:test-skill",
+      name: "test-skill",
+      description: "测试目录型 Skill",
+      content: "---\nname: test-skill\ndescription: 测试目录型 Skill\n---\n读取 references/guide.md。",
+      entrypoint: "SKILL.md",
+      rootPath: skillRoot,
+      files: [
+        { path: "SKILL.md", bytes: 82, kind: "entrypoint" },
+        { path: "references/guide.md", bytes: Buffer.byteLength(content), kind: "reference" },
+      ],
+      totalBytes: 82 + Buffer.byteLength(content),
+    }];
+
+    const started = await harness.runner.startTask({
+      prompt: "请使用已启用的 Skill",
+      projectId: null,
+      skills,
+    });
+    await harness.waitForEvent(
+      (event) => event.event.type === "task.completed" && event.event.taskId === started.taskId,
+    );
+
+    const detail = harness.runner.getTaskDetail(started.taskId);
+    expect(detail.task.workspace).toBe("");
+    expect(detail.toolCalls.map((call) => call.name)).toEqual(["read_skill_resource"]);
+    expect(detail.toolCalls[0]?.output).toContain(content);
+    model.assertComplete();
+  });
+
+  test("Skill 资源工具拒绝未登记路径和目录越界", async () => {
+    const model = new ScriptedModel([
+      [
+        functionCall(
+          "read_skill_resource",
+          { skillId: "skill:test-skill", path: "../secret.txt" },
+          { callId: "call-skill-outside" },
+        ),
+      ],
+      [assistantMessage("无法读取未授权资源。")],
+    ]);
+    const harness = await createHarness(model);
+    harnesses.push(harness);
+    const skillRoot = join(harness.root, "skills", "test-skill");
+    await mkdir(join(skillRoot, "references"), { recursive: true });
+    await Bun.write(join(skillRoot, "references", "guide.md"), "guide");
+    await Bun.write(join(harness.root, "secret.txt"), "secret-value");
+    const skills: SkillContext[] = [{
+      id: "skill:test-skill",
+      name: "test-skill",
+      description: "测试目录型 Skill",
+      content: "---\nname: test-skill\ndescription: 测试目录型 Skill\n---\n",
+      entrypoint: "SKILL.md",
+      rootPath: skillRoot,
+      files: [{ path: "references/guide.md", bytes: 5, kind: "reference" }],
+      totalBytes: 5,
+    }];
+
+    const started = await harness.runner.startTask({
+      prompt: "读取外部秘密",
+      projectId: null,
+      skills,
+    });
+    await harness.waitForEvent(
+      (event) => event.event.type === "task.completed" && event.event.taskId === started.taskId,
+    );
+
+    const detail = harness.runner.getTaskDetail(started.taskId);
+    expect(detail.toolCalls[0]?.status).toBe("failed");
+    expect(detail.toolCalls[0]?.error).toContain("有效相对路径");
+    expect(JSON.stringify(harness.messages)).not.toContain("secret-value");
+    model.assertComplete();
+  });
+
+  test("独立会话完成普通回答且不会调用系统工具", async () => {
+    const model = new ScriptedModel([[assistantMessage("这是独立会话的回答。")]]);
+    const harness = await createHarness(model);
+    harnesses.push(harness);
+
+    const started = await harness.runner.startTask({
+      prompt: "你好，请简单介绍一下自己",
+      projectId: null,
+    });
+    await harness.waitForEvent(
+      (event) => event.event.type === "task.completed" && event.event.taskId === started.taskId,
+    );
+
+    const detail = harness.runner.getTaskDetail(started.taskId);
+    expect(detail.task.projectId).toBeNull();
+    expect(detail.task.workspace).toBe("");
+    expect(detail.toolCalls).toHaveLength(0);
+    expect(detail.task.finalOutput).toContain("独立会话");
+    model.assertComplete();
+  });
+
+  test("项目会话保存项目映射并使用项目工作目录", async () => {
+    const model = new ScriptedModel([[assistantMessage("项目会话完成。")]]);
+    const harness = await createHarness(model);
+    harnesses.push(harness);
+    const project = harness.db.createProject({
+      id: crypto.randomUUID(),
+      name: "测试项目",
+      workspace: harness.workspace,
+    });
+
+    const started = await harness.runner.startTask({
+      prompt: "总结项目",
+      projectId: project.id,
+    });
+    await harness.waitForEvent(
+      (event) => event.event.type === "task.completed" && event.event.taskId === started.taskId,
+    );
+
+    const detail = harness.runner.getTaskDetail(started.taskId);
+    expect(detail.task.projectId).toBe(project.id);
+    expect(detail.task.workspace).toEndWith("/workspace");
+    model.assertComplete();
+  });
+
   test("完成多步读取并在审批后写入 summary.md", async () => {
     const model = new ScriptedModel([
       [
@@ -150,6 +287,64 @@ describe("TaskRunner", () => {
     const detail = currentDetail(harness, started.taskId);
     expect(detail.approvals[0]?.status).toBe("rejected");
     expect(detail.task.finalOutput).toContain("已拒绝写入");
+  });
+
+  test("完成后可以继续多轮对话并复用上下文", async () => {
+    const model = new ScriptedModel([
+      [assistantMessage("第一轮已完成。")],
+      [
+        functionCall(
+          "list_directory",
+          { path: "." },
+          { callId: "call-follow-up-list" },
+        ),
+      ],
+      [assistantMessage("第二轮已完成，已读取当前目录。")],
+    ]);
+    const harness = await setup(model);
+
+    const started = await harness.runner.startTask({
+      prompt: "先记住 Alpha 项目",
+      workspace: harness.workspace,
+    });
+    const firstCompleted = await harness.waitForEvent(
+      (event) =>
+        event.event.type === "task.completed" &&
+        event.event.taskId === started.taskId,
+    );
+
+    await harness.runner.continueTask(
+      started.taskId,
+      "现在读取当前目录并总结刚才记住的内容",
+    );
+    const resumed = await harness.waitForEvent(
+      (event) =>
+        event.event.type === "task.started" &&
+        event.event.taskId === started.taskId &&
+        event.event.seq > firstCompleted.event.seq,
+    );
+    await harness.waitForEvent(
+      (event) =>
+        event.event.type === "task.completed" &&
+        event.event.taskId === started.taskId &&
+        event.event.seq > resumed.event.seq,
+    );
+
+    const detail = currentDetail(harness, started.taskId);
+    expect(detail.task.status).toBe("completed");
+    expect(detail.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "先记住 Alpha 项目"],
+      ["assistant", "第一轮已完成。"],
+      ["user", "现在读取当前目录并总结刚才记住的内容"],
+      ["assistant", "第二轮已完成，已读取当前目录。"],
+    ]);
+    expect(detail.toolCalls.map((call) => call.name)).toEqual(["list_directory"]);
+    expect(
+      harness.messages.filter(
+        (message) => message.type === "event" && message.event.type === "message.user",
+      ),
+    ).toHaveLength(1);
+    model.assertComplete();
   });
 
   test("等待审批时取消，不会执行写入", async () => {

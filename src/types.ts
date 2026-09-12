@@ -12,6 +12,7 @@ export interface TaskRecord {
   title: string;
   prompt: string;
   workspace: string;
+  projectId: string | null;
   model: string;
   providerId: string | null;
   providerName: string | null;
@@ -21,6 +22,34 @@ export interface TaskRecord {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  workspace: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillRecord {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  content: string;
+  entrypoint: string;
+  directory: string | null;
+  files: SkillResourceRecord[];
+  totalBytes: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SkillResourceRecord {
+  path: string;
+  bytes: number;
+  kind: "entrypoint" | "agent" | "script" | "reference" | "asset" | "resource";
 }
 
 export interface TaskMessage {

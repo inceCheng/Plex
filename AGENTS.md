@@ -30,14 +30,39 @@
 - 已实现 React 界面：Codex 风格布局、默认白色主题与黑色主题切换、任务列表、新建任务、目录选择、模型供应商选择、思考强度选择、流式回复、工具记录、审批 diff、取消与历史查看。
 - 已接入 models.dev：缓存供应商与模型目录，支持 OpenAI Responses、OpenAI-compatible Chat Completions 与本地服务；专用协议供应商显示不可用原因。
 - 已支持自定义供应商：用户配置名称、Base URL、Key，拉取 `/models` 列表后选择模型，也可以手动添加模型 ID。
+- 已接入目录型 Skill 管理：设置中选择含 `SKILL.md` 的完整目录导入，保留 `agents/`、`scripts/`、`references/`、`assets/` 等附属资源；支持查看文件清单、编辑入口、启用、停用和删除。
 - 设置页中的供应商区域与“外观”同级，默认折叠，点击后展开完整供应商列表。
+- 设置弹窗左上角一级标题显示“设置”，供应商说明保留在副标题和内容区域；侧栏入口提示同步为“设置”。
+- 对话页模型选择器仅展示已配置 Key 的目录供应商，以及已完成模型配置的自定义供应商。
+- 同一任务支持多轮对话；完成一轮后可继续发送消息，用户消息靠右、Agent 消息靠左显示。
+- 对话输入框在任务执行期间保持常驻；Agent 输出支持 Markdown 渲染，正文和工具调用按事件顺序展示。
+- 已实现项目与会话关系：SQLite `projects` 表和可空的 `tasks.project_id` 保存归属；项目下可创建多个会话，侧栏按项目分组展示。Rust 宿主会将创建请求中的 `projectId` 转发给 Sidecar，项目会话会持久化到对应项目下。
+- 顶部“新建会话”创建独立会话；独立会话使用空工作目录且不注册项目文件工具，只保留已启用 Skill 的受限资源读取能力。项目会话使用项目授权目录并保留文件工具能力。
+- 前端使用 `@assistant-ui/react` 的 Runtime、Thread、Message 与 Message Parts primitives 渲染本地 Sidecar 事件；正文、处理状态、工具调用和审批均映射为对应消息 Part，保留实际事件顺序。连续工具调用通过官方推荐的 `MessagePrimitive.GroupedParts` 渲染为无边框折叠列表，参数、结果与审批内容按需展开。`motion` 用于处理状态和工具列表的进入动画。
+- 对话区会跟随新事件自动滚动到底部；项目分组支持折叠；模型选择器只展示已配置 Key 或本地服务，并在提交前再次校验凭据。
+- 启动阶段优先加载本地项目与会话摘要，收到默认会话摘要后按需加载该会话详情；已保存的自定义供应商配置会从本地读取。models.dev 目录不会在启动时请求，仅在设置中的供应商管理展开、刷新目录或保存自定义供应商时加载。
+- 前端入口使用异步应用模块、启动壳与错误边界。大型聊天渲染依赖加载期间窗口会显示启动状态；运行时异常会显示具体错误和重新加载入口。
+- assistant-ui 工具 Part 使用事件级唯一 `toolCallId`；同一调用的 `tool.started` 与 `approval.requested` 合并为同一条工具记录，避免 `useResources` 的重复键错误。
+- 同一轮 Agent 的处理状态、工具调用和正文会聚合为一个 Assistant UI 消息，按事件顺序渲染，并只显示一次 Plex 标识；用户消息使用右侧浅色气泡，气泡宽度按折叠后可见行的文字宽度自适应并受最大宽度限制，长内容默认折叠为 6 行并支持展开和收起。
+- 项目创建改为中文应用内弹窗，支持填写项目名称、选择本机工作目录、表单校验、错误反馈与键盘关闭；侧栏项目会话使用父子缩进与连接线显示层级，独立会话保留在“最近会话”。
+- 用户消息气泡在展开和折叠状态下均设有 480px 最小宽度；窄窗口下以可用宽度为上限，为右侧头像和间距保留空间。
+- 侧栏 Plex 标识已移除装饰黑点，设置入口增大为带焦点状态的图标按钮。
+- 项目名称输入框未聚焦时使用中性边框，聚焦时仅显示单层蓝色焦点边框；设置齿轮不显示外框。侧栏和会话输入区均使用阴影表现悬浮层次。输入框支持 Enter 发送与 Shift+Enter 换行。
+- 对话主栏右上和右下角使用与输入框一致的 16px 圆角。打开设置时只显示本地已保存的配置；仅在进入供应商管理或缺少 Key 时才读取 models.dev 目录和供应商 Key 状态，避免关闭设置时出现卡顿。
+- 已完成的 Agent 回复底部提供 Assistant UI `ActionBarPrimitive.Copy` 复制操作，使用 Lucide 标准复制与完成图标；仅复制该轮正文内容，并在复制成功后显示短暂反馈。
+- Agent 回复底部固定预留 30px 操作区，复制按钮与正文容器间隔缩至 2px；按钮显隐不改变消息高度，保留对话区底部 48px 间隔。已通过构建与真实聊天组件的浏览器悬停、复制和滚动位置检查。
+- 侧栏会话列表已调整为 Codex 风格的紧凑单行展示：项目节点与会话条目收紧至约 30px 高度，仅显示标题；项目会话通过小幅左缩进保留归属层级，状态与更新时间不再占用第二行。
+- Skill 严格校验 `SKILL.md` 的 YAML frontmatter，要求 `name` 和 `description`；完整目录复制到应用数据目录，`skills.json` 保存元数据与资源清单。同名 Skill 重导入会原子替换目录并保留启停状态和创建时间。
+- 会话只注入启用 Skill 的名称、说明和入口索引；Agent 判断相关后通过受限的 `read_skill_resource` 读取 `SKILL.md`，随后按入口引用继续读取登记的 UTF-8 资源。独立会话可读取 Skill 资源，仍无法访问项目文件工具。
+- 上述启动分层加载已通过 `bun run build`、`bun run verify` 与 `bun run tauri build --debug --no-bundle` 验证。
 - 已实现多供应商密钥配置：每个供应商独立保存到 macOS 钥匙串，Rust 在启动任务时读取并仅通过 Sidecar stdin 传递。
 - Sidecar 使用 `bun build --compile` 生成 `src-tauri/binaries/plex-agent-<target-triple>`，Tauri 通过 `externalBin` 打包。
 - 本机 macOS 26.6、arm64、Bun 1.3.13、Rust 1.98、Xcode 26.5 环境验证通过。
-- `bun run verify` 已通过：前端与 Sidecar 类型检查、20 项 Bun 测试、`cargo check`。
-- `cargo test --lib` 的 6 项本地测试通过；models.dev 网络测试已单独执行通过。
+- `bun run verify` 已通过：前端与 Sidecar 类型检查、25 项 Bun 测试、`cargo check`。
+- `cargo test --lib` 的 14 项本地测试通过，1 项 models.dev 网络测试按设计忽略；覆盖 Skill frontmatter、目录入口、资源清单、缺少入口与符号链接拒绝、内容限制和编辑状态保留。
 - `bun run tauri build --debug --no-bundle` 已通过，产物为 `src-tauri/target/debug/plex`。
 - `bun run tauri dev` 已验证主进程能够拉起编译后的 Sidecar，退出后两个进程都被清理。
+- 多轮继续任务请求已改为返回同步校验错误，重新编译 Sidecar 后不再静默吞掉 `continue_task` 失败。
 - 开发态启动时成功从 models.dev 拉取目录，缓存约 4.4 MB、213 个供应商。
 - 编译后的 Sidecar 已通过二进制验收测试：多步读取、写入审批、批准后写入 `summary.md`、历史查询全部成功。
 - 本机没有配置 `OPENAI_API_KEY`，真实模型调用、真实网络取消和真实模型下的拒绝分支尚未验证。

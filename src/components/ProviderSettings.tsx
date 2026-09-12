@@ -5,6 +5,7 @@ import type {
   CustomProviderModel,
 } from "../catalog";
 import type { Theme } from "../theme";
+import type { SkillRecord } from "../types";
 
 export interface ProviderKeyState {
   configured: boolean;
@@ -18,6 +19,28 @@ interface CustomDraft {
   apiKey: string;
   models: CustomProviderModel[];
   selected: string[];
+}
+
+interface SkillDraft {
+  skillId: string;
+  content: string;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function skillFileKindLabel(kind: SkillRecord["files"][number]["kind"]): string {
+  switch (kind) {
+    case "entrypoint": return "入口";
+    case "agent": return "Agent 配置";
+    case "script": return "脚本";
+    case "reference": return "参考资料";
+    case "asset": return "素材";
+    default: return "资源";
+  }
 }
 
 function emptyDraft(): CustomDraft {
@@ -54,6 +77,7 @@ export function ProviderSettings(props: {
   keyStates: Record<string, ProviderKeyState>;
   catalogSource: string;
   fetchedAtUnix: number;
+  catalogLoading: boolean;
   onSave: (providerId: string, key: string) => Promise<void>;
   onDelete: (providerId: string) => Promise<void>;
   onSaveCustom: (
@@ -66,6 +90,11 @@ export function ProviderSettings(props: {
     apiKey?: string;
   }) => Promise<CustomProviderModel[]>;
   onRefresh: () => Promise<void>;
+  skills: SkillRecord[];
+  onImportSkill: () => Promise<void>;
+  onToggleSkill: (skillId: string, enabled: boolean) => Promise<void>;
+  onUpdateSkill: (input: SkillDraft) => Promise<void>;
+  onDeleteSkill: (skillId: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -76,6 +105,9 @@ export function ProviderSettings(props: {
   const [customBusy, setCustomBusy] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
   const [manualModel, setManualModel] = useState("");
+  const [skillBusy, setSkillBusy] = useState<string | null>(null);
+  const [skillDraft, setSkillDraft] = useState<SkillDraft | null>(null);
+  const [skillError, setSkillError] = useState<string | null>(null);
 
   const configuredCount = props.providers.filter(
     (provider) => props.keyStates[provider.id]?.configured,
@@ -250,6 +282,52 @@ export function ProviderSettings(props: {
     }
   };
 
+  const toggleSkill = async (skill: SkillRecord) => {
+    setSkillBusy(skill.id);
+    try {
+      await props.onToggleSkill(skill.id, !skill.enabled);
+    } finally {
+      setSkillBusy(null);
+    }
+  };
+
+  const openSkillEditor = (skill: SkillRecord) => {
+    setSkillDraft({
+      skillId: skill.id,
+      content: skill.content,
+    });
+    setSkillError(null);
+  };
+
+  const saveSkill = async () => {
+    if (!skillDraft) return;
+    if (!skillDraft.content.trim()) {
+      setSkillError("SKILL.md 不能为空");
+      return;
+    }
+    setSkillBusy(skillDraft.skillId);
+    setSkillError(null);
+    try {
+      await props.onUpdateSkill({
+        ...skillDraft,
+      });
+      setSkillDraft(null);
+    } catch (error) {
+      setSkillError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSkillBusy(null);
+    }
+  };
+
+  const deleteSkill = async (skill: SkillRecord) => {
+    setSkillBusy(skill.id);
+    try {
+      await props.onDeleteSkill(skill.id);
+    } finally {
+      setSkillBusy(null);
+    }
+  };
+
   return (
     <div className="modal-backdrop" onClick={props.onClose}>
       <section
@@ -258,7 +336,7 @@ export function ProviderSettings(props: {
       >
         <header>
           <div>
-            <h2>模型供应商</h2>
+            <h2>设置</h2>
             <p>
               models.dev 目录与自定义 OpenAI-compatible 服务。Key
               保存在 macOS 钥匙串。
@@ -289,6 +367,106 @@ export function ProviderSettings(props: {
             </button>
           </div>
         </section>
+
+        <section className="skill-settings">
+          <div className="skill-settings-heading">
+            <div>
+              <strong>技能</strong>
+              <p>导入完整 Skill 目录。根目录需要包含 SKILL.md，附属资源会保留并供 Agent 按需读取。</p>
+            </div>
+            <button className="ghost" onClick={() => void props.onImportSkill()}>
+              ＋ 导入 Skill 目录
+            </button>
+          </div>
+          {props.skills.length > 0 ? (
+            <div className="skill-list">
+              {props.skills.map((skill) => (
+                <article className={`skill-row ${skill.enabled ? "is-enabled" : ""}`} key={skill.id}>
+                  <div className="skill-row-main">
+                    <div className="skill-title-line">
+                      <strong>{skill.name}</strong>
+                      <span className="skill-state">{skill.enabled ? "已启用" : "已停用"}</span>
+                    </div>
+                    <p>{skill.description || "未提供说明"}</p>
+                    <div className="skill-resource-summary">
+                      <span>{skill.entrypoint}</span>
+                      <span>{Math.max(0, skill.files.length - 1)} 个附属文件</span>
+                      <span>{formatBytes(skill.totalBytes)}</span>
+                    </div>
+                    {skill.files.length > 1 ? (
+                      <details className="skill-resource-list">
+                        <summary>查看目录文件</summary>
+                        <ul>
+                          {skill.files.map((file) => (
+                            <li key={file.path}>
+                              <span>{file.path}</span>
+                              <small>{skillFileKindLabel(file.kind)} · {formatBytes(file.bytes)}</small>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </div>
+                  <div className="skill-row-actions">
+                    <button
+                      className="ghost small"
+                      disabled={skillBusy === skill.id}
+                      onClick={() => openSkillEditor(skill)}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      className="ghost small"
+                      disabled={skillBusy === skill.id}
+                      onClick={() => void toggleSkill(skill)}
+                    >
+                      {skill.enabled ? "停用" : "启用"}
+                    </button>
+                    <button
+                      className="ghost small danger-text"
+                      disabled={skillBusy === skill.id}
+                      onClick={() => void deleteSkill(skill)}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="skill-empty">还没有 Skill。请选择一个根目录含 SKILL.md 的完整 Skill 文件夹。</p>
+          )}
+        </section>
+
+        {skillDraft ? (
+          <section className="skill-editor" aria-label="编辑 Skill">
+            <header className="skill-editor-header">
+              <div>
+                <strong>编辑 Skill</strong>
+                <p>名称和说明来自 YAML frontmatter。附属资源保持原目录结构。</p>
+              </div>
+              <button className="ghost small" onClick={() => setSkillDraft(null)}>
+                取消
+              </button>
+            </header>
+            <label className="skill-content-field">
+              SKILL.md
+              <textarea
+                value={skillDraft.content}
+                onChange={(event) => setSkillDraft({ ...skillDraft, content: event.target.value })}
+                spellCheck={false}
+                rows={12}
+              />
+            </label>
+            {skillError ? <p className="skill-editor-error">{skillError}</p> : null}
+            <div className="skill-editor-actions">
+              <span>入口最大 256 KB；保存时会校验 name 和 description</span>
+            <button className="primary" disabled={skillBusy === skillDraft.skillId} onClick={() => void saveSkill()}>
+                {skillBusy === skillDraft.skillId ? "保存中…" : "保存 Skill"}
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         <section
           className="provider-settings-row is-clickable"
@@ -327,13 +505,21 @@ export function ProviderSettings(props: {
                 placeholder="搜索供应商"
               />
               <span className="catalog-meta">
-                {props.catalogSource === "network" ? "已更新" : "本地缓存"}
+                {props.catalogLoading
+                  ? "正在加载目录"
+                  : props.catalogSource === "network"
+                    ? "已更新"
+                    : "本地缓存"}
                 {props.fetchedAtUnix > 0
                   ? ` · ${new Date(props.fetchedAtUnix * 1000).toLocaleString("zh-CN")}`
                   : ""}
               </span>
-              <button className="ghost" onClick={() => void props.onRefresh()}>
-                刷新目录
+              <button
+                className="ghost"
+                disabled={props.catalogLoading}
+                onClick={() => void props.onRefresh()}
+              >
+                {props.catalogLoading ? "正在加载…" : "刷新目录"}
               </button>
               <button className="primary" onClick={openNewCustom}>
                 ＋ 自定义供应商

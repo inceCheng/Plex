@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   TaskRunner,
@@ -9,9 +9,29 @@ import { PlexDatabase } from "./db.ts";
 import type {
   ProtocolResponse,
   SidecarOutboundMessage,
+  SkillContext,
 } from "./types.ts";
+import { resolveWorkspace } from "./paths.ts";
 
 const VERSION = "0.1.0";
+const MAX_SKILL_COUNT = 32;
+const MAX_SKILL_TOTAL_BYTES = 1024 * 1024;
+const MAX_SKILL_BYTES = 256 * 1024;
+const MAX_SKILL_DIRECTORY_BYTES = 50 * 1024 * 1024;
+const MAX_SKILL_RESOURCE_BYTES = 10 * 1024 * 1024;
+const MAX_SKILL_FILE_COUNT = 512;
+
+function parseSkillResourcePath(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "");
+  const parts = normalized.split("/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    parts.some((part) => !part || part === "." || part === "..")
+  ) return null;
+  return normalized;
+}
 
 function writeLine(message: SidecarOutboundMessage): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -66,6 +86,57 @@ function optionalString(
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseSkills(value: unknown): SkillContext[] {
+  if (!Array.isArray(value)) return [];
+  const skills = value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const skill = item as Record<string, unknown>;
+    if (
+      typeof skill.id !== "string" ||
+      typeof skill.name !== "string" ||
+      typeof skill.content !== "string" ||
+      skill.id.trim().length === 0 ||
+      skill.name.trim().length === 0 ||
+      skill.content.trim().length === 0 ||
+      new TextEncoder().encode(skill.content).byteLength > MAX_SKILL_BYTES
+    ) return [];
+    const entrypoint = parseSkillResourcePath(skill.entrypoint) ?? "SKILL.md";
+    const rootPath = typeof skill.rootPath === "string" && isAbsolute(skill.rootPath)
+      ? skill.rootPath
+      : null;
+    const files = Array.isArray(skill.files)
+      ? skill.files.flatMap((value) => {
+          if (!value || typeof value !== "object") return [];
+          const file = value as Record<string, unknown>;
+          const path = parseSkillResourcePath(file.path);
+          const bytes = typeof file.bytes === "number" && Number.isSafeInteger(file.bytes) && file.bytes >= 0
+            ? file.bytes
+            : -1;
+          const kind = typeof file.kind === "string" && ["entrypoint", "agent", "script", "reference", "asset", "resource"].includes(file.kind)
+            ? file.kind as SkillContext["files"][number]["kind"]
+            : "resource";
+          return path && bytes >= 0 && bytes <= MAX_SKILL_RESOURCE_BYTES
+            ? [{ path, bytes, kind }]
+            : [];
+        })
+      : [];
+    const totalBytes = files.reduce((total, file) => total + file.bytes, 0);
+    if (files.length > MAX_SKILL_FILE_COUNT || totalBytes > MAX_SKILL_DIRECTORY_BYTES) return [];
+    return [{
+      id: skill.id,
+      name: skill.name,
+      description: typeof skill.description === "string" ? skill.description : "",
+      content: skill.content,
+      entrypoint,
+      rootPath,
+      files,
+      totalBytes,
+    }];
+  });
+  const totalBytes = skills.reduce((total, skill) => total + new TextEncoder().encode(skill.content).byteLength, 0);
+  return skills.length <= MAX_SKILL_COUNT && totalBytes <= MAX_SKILL_TOTAL_BYTES ? skills : [];
 }
 
 function parseProvider(
@@ -132,14 +203,18 @@ async function handleRequest(
       });
     case "start_task": {
       const prompt = requireString(payload, "prompt");
-      const workspaceInput = requireString(payload, "workspace");
+      const workspaceInput = optionalString(payload, "workspace");
+      const projectId = payload.projectId === null ? null : optionalString(payload, "projectId");
       const model = optionalString(payload, "model");
       const provider = parseProvider(payload);
+      const skills = parseSkills(payload.skills);
       const started = await runner.startTask({
         prompt,
         workspace: workspaceInput,
+        projectId,
         model,
         provider,
+        skills,
       });
       void started.done.catch((error: unknown) => {
         log(
@@ -150,6 +225,29 @@ async function handleRequest(
         );
       });
       return response(id, { taskId: started.taskId });
+    }
+    case "create_project": {
+      const name = requireString(payload, "name");
+      const workspace = await resolveWorkspace(requireString(payload, "workspace"));
+      const project = db.createProject({ id: crypto.randomUUID(), name, workspace });
+      return response(id, project);
+    }
+    case "list_projects":
+      return response(id, { projects: db.listProjects() });
+    case "get_project": {
+      const projectId = requireString(payload, "projectId");
+      return response(id, db.getProject(projectId));
+    }
+    case "delete_project": {
+      const projectId = requireString(payload, "projectId");
+      db.deleteProject(projectId);
+      return response(id, { projectId });
+    }
+    case "continue_task": {
+      const taskId = requireString(payload, "taskId");
+      const prompt = requireString(payload, "prompt");
+      runner.continueTask(taskId, prompt, parseSkills(payload.skills));
+      return response(id, { taskId });
     }
     case "approve": {
       const taskId = requireString(payload, "taskId");

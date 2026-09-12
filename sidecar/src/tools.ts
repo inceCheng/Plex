@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { tool } from "@openai/agents";
 import { createTwoFilesPatch } from "diff";
 import { z } from "zod";
 import type { PlexDatabase } from "./db.ts";
+import type { SkillContext } from "./types.ts";
 import {
   resolveReadPath,
   resolveWritePath,
@@ -74,6 +75,7 @@ export interface TaskToolsRuntime {
   signal: AbortSignal;
   emit: (type: string, data: Record<string, unknown>) => void;
   pendingWrites: Map<string, WritePreview>;
+  skills: SkillContext[];
 }
 
 function toErrorMessage(error: unknown): string {
@@ -102,7 +104,11 @@ async function readUtf8TextFile(path: string): Promise<string> {
   if (buffer.includes(0)) {
     throw new Error(`文件看起来是二进制内容，暂不读取：${path}`);
   }
-  return buffer.toString("utf8");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    throw new Error(`文件不是有效的 UTF-8 文本：${path}`);
+  }
 }
 
 export async function listDirectory(
@@ -235,6 +241,48 @@ export async function readTextFile(
   };
 }
 
+function normalizedSkillResourcePath(requestedPath: string): string {
+  const normalized = requestedPath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const parts = normalized.split("/");
+  if (
+    !normalized ||
+    isAbsolute(requestedPath) ||
+    normalized.startsWith("/") ||
+    parts.some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("Skill 资源路径必须是目录内的有效相对路径");
+  }
+  return normalized;
+}
+
+export async function readSkillResource(
+  skills: SkillContext[],
+  skillId: string,
+  requestedPath: string,
+): Promise<TextFileResult & { skillId: string }> {
+  const skill = skills.find((item) => item.id === skillId);
+  if (!skill || !skill.rootPath) {
+    throw new Error("Skill 未启用或没有可读取的安装目录");
+  }
+  const resourcePath = normalizedSkillResourcePath(requestedPath);
+  if (!skill.files.some((file) => file.path === resourcePath)) {
+    throw new Error(`资源未登记在该 Skill 中：${resourcePath}`);
+  }
+  const root = await realpath(skill.rootPath);
+  const target = await realpath(resolve(root, resourcePath));
+  const relativePath = relative(root, target);
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error("Skill 资源路径越出安装目录");
+  }
+  const content = await readUtf8TextFile(target);
+  return {
+    skillId,
+    path: resourcePath,
+    bytes: Buffer.byteLength(content, "utf8"),
+    content,
+  };
+}
+
 function hashWriteState(existed: boolean, content: string): string {
   return createHash("sha256")
     .update(existed ? "existing" : "missing")
@@ -350,7 +398,7 @@ async function withToolRecording(
   }
 }
 
-export function createTaskTools(runtime: TaskToolsRuntime) {
+export function createTaskTools(runtime: TaskToolsRuntime, includeWorkspaceTools = true) {
   const listDirectoryTool = tool({
     name: "list_directory",
     description:
@@ -436,11 +484,34 @@ export function createTaskTools(runtime: TaskToolsRuntime) {
     },
   });
 
-  return [
+  const readSkillResourceTool = tool({
+    name: "read_skill_resource",
+    description:
+      "按需读取已启用 Skill 目录中的 UTF-8 文本。先读取 Skill 索引给出的 entrypoint，再读取入口指令明确引用的相对资源；脚本资源仅作为文本读取。",
+    parameters: z.object({
+      skillId: z.string().describe("已启用 Skill 的 ID"),
+      path: z.string().describe("Skill 目录内的资源相对路径"),
+    }),
+    async execute({ skillId, path }, _context, details) {
+      const callId = details?.toolCall?.callId ?? crypto.randomUUID();
+      const args = { skillId, path };
+      return withToolRecording(runtime, "read_skill_resource", callId, args, () =>
+        readSkillResource(runtime.skills, skillId, path),
+      );
+    },
+  });
+
+  const workspaceTools = [
     listDirectoryTool,
     searchTextTool,
     readTextFileTool,
     writeTextFileTool,
+  ];
+  return [
+    ...(includeWorkspaceTools ? workspaceTools : []),
+    ...(runtime.skills.some((skill) => skill.rootPath && skill.files.length > 0)
+      ? [readSkillResourceTool]
+      : []),
   ];
 }
 
