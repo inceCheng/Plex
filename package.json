@@ -1,0 +1,40 @@
+{
+  "name": "plex",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "bun run check && vite build",
+    "preview": "vite preview",
+    "check": "bun run check:web && bun run check:sidecar",
+    "check:web": "tsc -p tsconfig.json --noEmit",
+    "check:sidecar": "tsc -p tsconfig.sidecar.json --noEmit",
+    "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test": "bun test sidecar/tests",
+    "sidecar:dev": "bun run sidecar/src/main.ts",
+    "sidecar:build": "bun run scripts/build-sidecar.ts",
+    "verify": "bun run sidecar:build && bun run check && bun test sidecar/tests && bun run check:rust",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@openai/agents": "^0.18.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-opener": "^2",
+    "diff": "^9.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/bun": "^1.4.2",
+    "@types/diff": "^8.0.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}
