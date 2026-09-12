@@ -19,7 +19,7 @@
 ```bash
 bun install          # 安装依赖
 bun run tauri dev    # 构建 Sidecar、启动 Vite 与 Tauri 窗口
-bun run verify       # 构建 Sidecar、类型检查、18 项测试、Rust 检查
+bun run verify       # 构建 Sidecar、类型检查、20 项测试、Rust 检查
 bun run sidecar:build
 bun run test
 ```
@@ -70,7 +70,9 @@ Sidecar 由 Rust 拉起，优先使用 `src-tauri/binaries/plex-agent-<target-tr
 
 ## 模型配置
 
-界面使用接近 Codex 的深色布局：左侧任务列表，中间对话与工具记录，底部是任务输入框和模型选择器。
+界面使用接近 Codex 的布局：左侧任务列表，中间对话与工具记录，底部是任务输入框和模型选择器。
+
+界面默认使用白色主题，可以在设置页切换为黑色主题；主题选择保存在本地。
 
 模型选择器读取 models.dev 目录，支持：
 
@@ -106,6 +108,7 @@ OPENROUTER_API_KEY=sk-or-... bun run tauri dev
 - models.dev 目录解析、供应商支持范围、模型工具能力和思考强度选项。
 - 自定义供应商模型列表解析、URL 拼接、Bearer 认证与本地兼容服务调用。
 - 自定义 OpenAI-compatible 服务的工具调用、审批和写入完整链路。
+- 主题解析：默认白色、持久化黑色主题和非法值回退。
 
 二进制验收测试使用 `PLEX_TEST_MODEL_SCRIPT` 注入 ScriptedModel，不访问网络。该变量只用于测试；生产运行需要配置 API Key。
 

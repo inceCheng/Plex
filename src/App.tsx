@@ -19,6 +19,7 @@ import {
   ProviderSettings,
   type ProviderKeyState,
 } from "./components/ProviderSettings";
+import { resolveTheme, type Theme } from "./theme";
 import type {
   SidecarStatus,
   TaskDetail,
@@ -392,6 +393,9 @@ function Timeline(props: {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<Theme>(() =>
+    resolveTheme(localStorage.getItem("plex.theme")),
+  );
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
@@ -420,6 +424,11 @@ export default function App() {
   useEffect(() => {
     selectedRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("plex.theme", theme);
+  }, [theme]);
 
   const refreshTasks = useCallback(async () => {
     const next = await sidecar.listTasks();
@@ -924,6 +933,8 @@ export default function App() {
 
       {settingsOpen ? (
         <ProviderSettings
+          theme={theme}
+          onThemeChange={setTheme}
           providers={providers}
           customProviders={customProviders}
           keyStates={keyStates}

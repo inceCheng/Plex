@@ -4,6 +4,7 @@ import type {
   CustomProviderConfig,
   CustomProviderModel,
 } from "../catalog";
+import type { Theme } from "../theme";
 
 export interface ProviderKeyState {
   configured: boolean;
@@ -44,6 +45,8 @@ function sourceLabel(source: string | null): string {
 }
 
 export function ProviderSettings(props: {
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
   providers: CatalogProvider[];
   customProviders: CustomProviderConfig[];
   keyStates: Record<string, ProviderKeyState>;
@@ -256,6 +259,27 @@ export function ProviderSettings(props: {
             关闭
           </button>
         </header>
+
+        <section className="theme-settings">
+          <div>
+            <strong>外观</strong>
+            <p>默认使用白色主题，可以随时切换为黑色。</p>
+          </div>
+          <div className="theme-options">
+            <button
+              className={props.theme === "light" ? "is-active" : ""}
+              onClick={() => props.onThemeChange("light")}
+            >
+              白色
+            </button>
+            <button
+              className={props.theme === "dark" ? "is-active" : ""}
+              onClick={() => props.onThemeChange("dark")}
+            >
+              黑色
+            </button>
+          </div>
+        </section>
 
         <div className="settings-toolbar">
           <input
