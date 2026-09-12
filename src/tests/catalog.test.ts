@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  customProvidersToCatalog,
   defaultEffort,
   normalizeCatalog,
   parseEfforts,
@@ -101,5 +102,26 @@ describe("models.dev catalog", () => {
     const providers = sortProviders(normalizeCatalog(fixture));
     expect(providers[0]?.id).toBe("openai");
     expect(providers[1]?.id).toBe("openrouter");
+  });
+
+  test("自定义供应商可以合并进模型目录", () => {
+    const providers = customProvidersToCatalog([
+      {
+        id: "custom:local",
+        name: "公司网关",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        apiStyle: "chat_completions",
+        models: [{ id: "internal-model", name: "Internal Model" }],
+      },
+    ]);
+    expect(providers[0]).toMatchObject({
+      id: "custom:local",
+      name: "公司网关",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      source: "custom",
+      supported: true,
+      local: true,
+    });
+    expect(providers[0]?.models[0]?.id).toBe("internal-model");
   });
 });

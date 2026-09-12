@@ -12,10 +12,12 @@ export interface CatalogProvider {
   id: string;
   name: string;
   api: string | null;
+  baseUrl: string;
   npm: string | null;
   env: string[];
   doc: string | null;
   models: CatalogModel[];
+  source: "models.dev" | "custom";
   supported: boolean;
   reason: string | null;
   apiStyle: "responses" | "chat_completions";
@@ -160,6 +162,9 @@ export function normalizeCatalog(raw: unknown): CatalogProvider[] {
         id,
         name: stringValue(provider.name) ?? id,
         api,
+        baseUrl:
+          api ??
+          (id === "openai" ? "https://api.openai.com/v1" : ""),
         npm,
         env: Array.isArray(provider.env)
           ? provider.env.filter(
@@ -168,6 +173,7 @@ export function normalizeCatalog(raw: unknown): CatalogProvider[] {
           : [],
         doc: stringValue(provider.doc),
         models,
+        source: "models.dev",
         supported: support.supported && models.length > 0,
         reason:
           support.supported && models.length === 0
@@ -178,6 +184,50 @@ export function normalizeCatalog(raw: unknown): CatalogProvider[] {
       };
     },
   );
+}
+
+export interface CustomProviderModel {
+  id: string;
+  name?: string | null;
+}
+
+export interface CustomProviderConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiStyle: "responses" | "chat_completions";
+  models: CustomProviderModel[];
+}
+
+export function customProvidersToCatalog(
+  customProviders: CustomProviderConfig[],
+): CatalogProvider[] {
+  return customProviders.map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    api: provider.baseUrl,
+    baseUrl: provider.baseUrl,
+    npm: null,
+    env: [],
+    doc: null,
+    source: "custom",
+    supported: provider.models.length > 0,
+    reason:
+      provider.models.length > 0 ? null : "还没有选择模型，请先拉取模型列表",
+    apiStyle: provider.apiStyle,
+    local:
+      provider.baseUrl.includes("127.0.0.1") ||
+      provider.baseUrl.includes("localhost"),
+    models: provider.models.map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      reasoning: false,
+      efforts: [],
+      toolCall: true,
+      context: null,
+      output: null,
+    })),
+  }));
 }
 
 const FEATURED_PROVIDERS = [

@@ -29,11 +29,12 @@
 - 已实现 Rust 宿主：Sidecar 进程管理、stdio JSON 转发、事件推送、models.dev 目录缓存、多供应商钥匙串读写与应用退出清理。
 - 已实现 React 界面：Codex 风格深色布局、任务列表、新建任务、目录选择、模型供应商选择、思考强度选择、流式回复、工具记录、审批 diff、取消与历史查看。
 - 已接入 models.dev：缓存供应商与模型目录，支持 OpenAI Responses、OpenAI-compatible Chat Completions 与本地服务；专用协议供应商显示不可用原因。
+- 已支持自定义供应商：用户配置名称、Base URL、Key，拉取 `/models` 列表后选择模型，也可以手动添加模型 ID。
 - 已实现多供应商密钥配置：每个供应商独立保存到 macOS 钥匙串，Rust 在启动任务时读取并仅通过 Sidecar stdin 传递。
 - Sidecar 使用 `bun build --compile` 生成 `src-tauri/binaries/plex-agent-<target-triple>`，Tauri 通过 `externalBin` 打包。
 - 本机 macOS 26.6、arm64、Bun 1.3.13、Rust 1.98、Xcode 26.5 环境验证通过。
-- `bun run verify` 已通过：前端与 Sidecar 类型检查、16 项 Bun 测试、`cargo check`。
-- `cargo test --lib` 的 2 项本地测试通过；models.dev 网络测试已单独执行通过。
+- `bun run verify` 已通过：前端与 Sidecar 类型检查、18 项 Bun 测试、`cargo check`。
+- `cargo test --lib` 的 6 项本地测试通过；models.dev 网络测试已单独执行通过。
 - `bun run tauri build --debug --no-bundle` 已通过，产物为 `src-tauri/target/debug/plex`。
 - `bun run tauri dev` 已验证主进程能够拉起编译后的 Sidecar，退出后两个进程都被清理。
 - 开发态启动时成功从 models.dev 拉取目录，缓存约 4.4 MB、213 个供应商。
@@ -89,6 +90,7 @@
 - OpenAI Agents SDK 官方接口已在 2026-09-12 核对：`run`、function tools、`stream: true`、`needsApproval`、`interruptions`、`state.approve()` 与 `state.reject()`。
 - 供应商适配边界：OpenAI 使用 Responses；`@ai-sdk/openai-compatible` 与 OpenRouter 使用 Chat Completions；Anthropic、Google、Bedrock 等专用协议暂不接入。
 - 思考强度来自 models.dev 的 `reasoning_options.effort.values`，写入 SDK 的 `modelSettings.reasoning.effort`。
+- 自定义供应商配置保存在应用数据目录的 `custom-providers.json`；Key 仍按供应商保存到 macOS 钥匙串。
 
 ## 首个验收场景
 

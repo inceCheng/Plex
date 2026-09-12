@@ -41,6 +41,8 @@
 - macOS 使用 `security` 命令读写钥匙串，服务名为 `com.plex.desktop.provider`，账号为供应商 ID。
 - `provider_key_status` 检查环境变量、钥匙串和本地服务；`save_provider_key` 与 `delete_provider_key` 管理单个供应商。
 - `start_task` 在 Rust 侧解析 Key，构建 Sidecar 请求并注入密钥，密钥不经过前端持久化。
+- `list_custom_providers`、`save_custom_provider`、`delete_custom_provider` 管理自定义供应商，配置保存在应用数据目录的 `custom-providers.json`。
+- `fetch_provider_models` 调用 `{Base URL}/models`，支持 Bearer Key、OpenAI `data[]`、Ollama `models[]` 和字符串数组响应。
 - 应用退出时终止 Sidecar 子进程。
 
 ### React 界面
@@ -53,6 +55,7 @@
 - 运行中任务支持取消。
 - 模型选择器支持供应商搜索、模型搜索、工具调用能力过滤与思考强度按钮。
 - 设置页按供应商管理 Key，展示目录来源、更新时间、支持状态和不可用原因。
+- 自定义供应商表单支持名称、Base URL、API Key、拉取模型列表、勾选模型和手动添加模型 ID。
 
 ### 模型供应商
 
@@ -60,6 +63,7 @@
 - 模型列表过滤掉 `tool_call == false` 的条目，避免选择无法驱动 Agent 循环的模型。
 - 思考强度读取 `reasoning_options` 中的 `effort.values`，默认优先 `medium`。
 - 专用协议供应商（Anthropic、Google、Bedrock 等）显示为不可用，并给出原因。
+- 自定义供应商与 models.dev 目录合并后进入同一个模型选择器；自定义模型支持 OpenAI-compatible 调用。
 - 详细协议和边界见 `docs/models-and-providers.md`。
 
 ## 验证结果
@@ -75,14 +79,15 @@ bun run tauri dev
 验证内容：
 
 - TypeScript 前端与 Sidecar 类型检查通过。
-- 16 项 Bun 测试通过，59 个断言。
+- 18 项 Bun 测试通过，67 个断言。
 - `cargo check` 通过。
-- `cargo test --lib` 通过 2 项本地测试；`models_dev_is_reachable` 网络测试手动执行通过。
+- `cargo test --lib` 通过 6 项本地测试；`models_dev_is_reachable` 网络测试手动执行通过。
 - Tauri debug 无打包构建成功，产物为 `src-tauri/target/debug/plex`。
 - 开发态启动时，主进程成功拉起 `plex-agent-aarch64-apple-darwin`；退出后两个进程都已清理。
 - 开发态启动时成功拉取 models.dev，缓存文件约 4.4 MB，包含 213 个供应商。
 - 编译后的 Sidecar 可独立启动，通过 `ping` 返回版本与数据库信息。
 - 二进制验收测试在编译后的 Sidecar 中完成供应商字段传递、`list_directory`、两次 `read_text_file`、`write_text_file` 审批与写入，最终 `summary.md` 内容正确，任务状态为 `completed`。
+- 本地 OpenAI-compatible mock 服务测试通过自定义 Base URL 完成 Chat Completions 工具调用、审批和写入，验证了自定义供应商完整链路。
 
 验收测试使用 `PLEX_TEST_MODEL_SCRIPT` 注入 ScriptedModel，覆盖 SDK Agent 循环、流式运行、工具调用与审批恢复，不依赖外部网络。该变量仅用于测试。
 
@@ -90,6 +95,7 @@ bun run tauri dev
 
 - 真实 OpenAI 模型调用：本机未配置 `OPENAI_API_KEY`。
 - 真实第三方供应商调用：尚未使用 OpenRouter、DeepSeek 等账号实测。
+- 真实自定义网关调用：尚未连接用户的私有服务实测。
 - 真实网络请求下的取消时延与 SDK 重试行为。
 - 应用重启后恢复审批暂停点。当前仅保留历史记录并将未完成任务标记为 `interrupted`。
 - `tauri build` 生成 DMG/APP 安装包、签名与公证。
@@ -105,3 +111,4 @@ bun run tauri dev
 - 首个版本只允许写入已存在的目录，不自动创建中间目录。
 - 供应商支持范围目前为 OpenAI 与 OpenAI-compatible。专用协议供应商需要后续适配器。
 - `budget_tokens` 思考预算和供应商自定义参数尚未进入界面。
+- 自定义供应商的模型能力依赖用户自行确认；当前不读取自定义模型的上下文长度和思考强度元数据。

@@ -11,7 +11,7 @@
 - Bun 1.3：依赖管理、脚本、测试、Sidecar 运行时与单文件编译。
 - OpenAI Agents SDK TypeScript `@openai/agents` 0.18：Agent 循环、流式事件、工具调用与审批暂停。
 - Bun SQLite：任务、消息、事件、工具调用和审批记录持久化。
-- models.dev：供应商与模型目录，缓存 24 小时。
+- models.dev 与自定义供应商：内置目录缓存 24 小时，自定义供应商可以配置 URL、Key 和模型。
 - macOS Keychain：按供应商保存 API Key，密钥不进入 SQLite、日志或前端持久化。
 
 ## 开发命令
@@ -19,7 +19,7 @@
 ```bash
 bun install          # 安装依赖
 bun run tauri dev    # 构建 Sidecar、启动 Vite 与 Tauri 窗口
-bun run verify       # 构建 Sidecar、类型检查、16 项测试、Rust 检查
+bun run verify       # 构建 Sidecar、类型检查、18 项测试、Rust 检查
 bun run sidecar:build
 bun run test
 ```
@@ -78,8 +78,12 @@ Sidecar 由 Rust 拉起，优先使用 `src-tauri/binaries/plex-agent-<target-tr
 - 在所选供应商的模型之间搜索和切换。
 - 按模型的 `reasoning_options` 选择思考强度。
 - 在供应商设置中分别保存多个 API Key。
+- 添加自定义供应商：填写名称、Base URL、API Key，拉取 `/models` 列表后选择模型。
+- 服务不提供 `/models` 时，可以手动添加模型 ID。
 
 OpenAI 使用 Responses API；OpenAI-compatible 供应商使用 Chat Completions。Provider、模型和思考强度的完整说明见 `docs/models-and-providers.md`。
+
+自定义供应商配置保存在应用数据目录；Key 保存在 macOS 钥匙串。模型请求直接发送到用户填写的 Base URL。
 
 也可以直接使用环境变量：
 
@@ -100,6 +104,8 @@ OPENROUTER_API_KEY=sk-or-... bun run tauri dev
 - JSONL 协议启动、无 API Key 失败回执、历史查询。
 - 编译后 Sidecar 执行完整验收任务并写入 `summary.md`。
 - models.dev 目录解析、供应商支持范围、模型工具能力和思考强度选项。
+- 自定义供应商模型列表解析、URL 拼接、Bearer 认证与本地兼容服务调用。
+- 自定义 OpenAI-compatible 服务的工具调用、审批和写入完整链路。
 
 二进制验收测试使用 `PLEX_TEST_MODEL_SCRIPT` 注入 ScriptedModel，不访问网络。该变量只用于测试；生产运行需要配置 API Key。
 
@@ -107,6 +113,7 @@ OPENROUTER_API_KEY=sk-or-... bun run tauri dev
 
 - 真实模型调用尚未验证，本机没有配置 API Key。
 - Anthropic、Google、Bedrock 等专用协议供应商暂未接入，界面会显示不可用原因。
+- 自定义供应商需要提供 OpenAI-compatible Chat Completions 或 Responses 接口；`/models` 列表缺失时可以手动填写模型 ID。
 - `budget_tokens` 思考预算和供应商自定义参数暂未支持。
 - 审批暂停状态保存在 Sidecar 内存中，应用重启后只保留历史记录，不能继续原审批。
 - 已取消任务的模型请求依赖 SDK 的 `AbortSignal` 支持；真实网络请求下的取消行为仍待实测。

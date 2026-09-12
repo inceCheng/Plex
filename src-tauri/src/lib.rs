@@ -500,6 +500,13 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+fn unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
 fn read_cached_catalog(path: &PathBuf) -> Option<CatalogResponse> {
     let text = std::fs::read_to_string(path).ok()?;
     let catalog: Value = serde_json::from_str(&text).ok()?;
@@ -578,6 +585,245 @@ async fn models_catalog(
             }
         }
     }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomProviderModel {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomProviderConfig {
+    id: String,
+    name: String,
+    base_url: String,
+    #[serde(default = "default_api_style")]
+    api_style: String,
+    #[serde(default)]
+    models: Vec<CustomProviderModel>,
+}
+
+fn default_api_style() -> String {
+    "chat_completions".to_string()
+}
+
+fn custom_providers_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("无法创建应用数据目录：{error}"))?;
+    Ok(data_dir.join("custom-providers.json"))
+}
+
+fn read_custom_providers(app: &AppHandle) -> Result<Vec<CustomProviderConfig>, String> {
+    read_custom_providers_from_path(&custom_providers_path(app)?)
+}
+
+fn read_custom_providers_from_path(
+    path: &PathBuf,
+) -> Result<Vec<CustomProviderConfig>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("读取自定义供应商失败：{error}"))?;
+    serde_json::from_str(&text).map_err(|error| format!("解析自定义供应商失败：{error}"))
+}
+
+fn write_custom_providers(
+    app: &AppHandle,
+    providers: &[CustomProviderConfig],
+) -> Result<(), String> {
+    write_custom_providers_to_path(&custom_providers_path(app)?, providers)
+}
+
+fn write_custom_providers_to_path(
+    path: &PathBuf,
+    providers: &[CustomProviderConfig],
+) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(providers)
+        .map_err(|error| format!("序列化自定义供应商失败：{error}"))?;
+    std::fs::write(path, text).map_err(|error| format!("写入自定义供应商失败：{error}"))
+}
+
+#[tauri::command]
+fn list_custom_providers(app: AppHandle) -> Result<Vec<CustomProviderConfig>, String> {
+    read_custom_providers(&app)
+}
+
+#[tauri::command]
+fn save_custom_provider(
+    app: AppHandle,
+    provider: CustomProviderConfig,
+) -> Result<CustomProviderConfig, String> {
+    let saved = normalize_custom_provider(provider)?;
+    let mut providers = read_custom_providers(&app)?;
+    providers.retain(|item| item.id != saved.id);
+    providers.push(saved.clone());
+    write_custom_providers(&app, &providers)?;
+    Ok(saved)
+}
+
+fn normalize_custom_provider(
+    provider: CustomProviderConfig,
+) -> Result<CustomProviderConfig, String> {
+    let name = provider.name.trim();
+    let base_url = provider.base_url.trim().trim_end_matches('/');
+    if name.is_empty() {
+        return Err("供应商名称不能为空".to_string());
+    }
+    if base_url.is_empty() {
+        return Err("Base URL 不能为空".to_string());
+    }
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        return Err("Base URL 需要以 http:// 或 https:// 开头".to_string());
+    }
+    let id = if provider.id.trim().is_empty() {
+        format!("custom:{}", unix_millis())
+    } else {
+        provider.id.trim().to_string()
+    };
+    if !id.starts_with("custom:") {
+        return Err("自定义供应商 ID 需要以 custom: 开头".to_string());
+    }
+
+    Ok(CustomProviderConfig {
+        id,
+        name: name.to_string(),
+        base_url: base_url.to_string(),
+        api_style: if provider.api_style == "responses" {
+            "responses".to_string()
+        } else {
+            "chat_completions".to_string()
+        },
+        models: provider.models,
+    })
+}
+
+#[tauri::command]
+fn delete_custom_provider(app: AppHandle, provider_id: String) -> Result<(), String> {
+    let mut providers = read_custom_providers(&app)?;
+    providers.retain(|item| item.id != provider_id);
+    write_custom_providers(&app, &providers)?;
+    delete_keychain_key(PROVIDER_KEYCHAIN_SERVICE, provider_id.trim())
+}
+
+fn models_endpoint(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/models") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/models")
+    }
+}
+
+fn parse_model_list(value: &Value) -> Result<Vec<CustomProviderModel>, String> {
+    let items = if let Some(array) = value.as_array() {
+        array.clone()
+    } else if let Some(array) = value.get("data").and_then(Value::as_array) {
+        array.clone()
+    } else if let Some(array) = value.get("models").and_then(Value::as_array) {
+        array.clone()
+    } else {
+        return Err("模型列表响应中没有 data 或 models 数组".to_string());
+    };
+
+    let mut models = Vec::new();
+    for item in items {
+        let (id, name) = match item {
+            Value::String(id) => (id.clone(), None),
+            Value::Object(object) => {
+                let id = object
+                    .get("id")
+                    .or_else(|| object.get("model"))
+                    .or_else(|| object.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let Some(id) = id else {
+                    continue;
+                };
+                let name = object
+                    .get("name")
+                    .or_else(|| object.get("display_name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                (id, name)
+            }
+            _ => continue,
+        };
+        if id.trim().is_empty() {
+            continue;
+        }
+        models.push(CustomProviderModel {
+            id,
+            name: name.filter(|value| !value.trim().is_empty()),
+        });
+    }
+
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+    models.dedup_by(|left, right| left.id == right.id);
+    models.truncate(2000);
+    if models.is_empty() {
+        return Err("没有解析到可用模型".to_string());
+    }
+    Ok(models)
+}
+
+async fn fetch_provider_models_from_endpoint(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<CustomProviderModel>, String> {
+    let url = models_endpoint(base_url);
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("Base URL 需要以 http:// 或 https:// 开头".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("Plex/0.1.0")
+        .build()
+        .map_err(|error| format!("创建模型列表客户端失败：{error}"))?;
+
+    let mut request = client.get(&url);
+    if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("无法访问 {url}：{error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("读取模型列表响应失败：{error}"))?;
+    if !status.is_success() {
+        let summary: String = text.chars().take(300).collect();
+        return Err(format!(
+            "拉取模型列表失败（HTTP {status}）：{summary}"
+        ));
+    }
+    let value: Value =
+        serde_json::from_str(&text).map_err(|error| format!("解析模型列表失败：{error}"))?;
+    parse_model_list(&value)
+}
+
+#[tauri::command]
+async fn fetch_provider_models(
+    base_url: String,
+    provider_id: Option<String>,
+    api_key: Option<String>,
+) -> Result<Vec<CustomProviderModel>, String> {
+    let key = api_key
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| provider_id.and_then(|id| keychain_key(PROVIDER_KEYCHAIN_SERVICE, &id)));
+    fetch_provider_models_from_endpoint(&base_url, key.as_deref()).await
 }
 
 #[derive(Deserialize)]
@@ -810,6 +1056,10 @@ pub fn run() {
             sidecar_send,
             sidecar_status,
             models_catalog,
+            list_custom_providers,
+            save_custom_provider,
+            delete_custom_provider,
+            fetch_provider_models,
             provider_key_status,
             save_provider_key,
             delete_provider_key,
@@ -825,6 +1075,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     #[test]
     fn detects_local_providers() {
@@ -854,6 +1106,112 @@ mod tests {
             local: Some(true),
         };
         assert_eq!(resolve_provider_key(&provider).unwrap(), "local");
+    }
+
+    #[test]
+    fn builds_models_endpoint() {
+        assert_eq!(
+            models_endpoint("https://example.com/v1/"),
+            "https://example.com/v1/models"
+        );
+        assert_eq!(
+            models_endpoint("https://example.com/v1/models"),
+            "https://example.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn parses_different_model_list_shapes() {
+        let openai_shape = serde_json::json!({
+            "object": "list",
+            "data": [
+                { "id": "z-model", "name": "Z Model" },
+                { "id": "a-model" }
+            ]
+        });
+        let models = parse_model_list(&openai_shape).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "a-model");
+        assert_eq!(models[1].id, "z-model");
+        assert_eq!(models[1].name.as_deref(), Some("Z Model"));
+
+        let ollama_shape = serde_json::json!({
+            "models": [{ "model": "llama-local" }]
+        });
+        let models = parse_model_list(&ollama_shape).unwrap();
+        assert_eq!(models[0].id, "llama-local");
+    }
+
+    #[test]
+    fn fetches_models_from_local_compatible_server() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let _ = sender.send(request);
+            let body = r#"{"object":"list","data":[{"id":"model-b"},{"id":"model-a"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let models = tauri::async_runtime::block_on(fetch_provider_models_from_endpoint(
+            &format!("http://{address}/v1"),
+            Some("test-key"),
+        ))
+        .unwrap();
+        let request = receiver.recv().unwrap().to_lowercase();
+        assert!(request.contains("get /v1/models"));
+        assert!(request.contains("authorization: bearer test-key"));
+        assert_eq!(
+            models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            vec!["model-a", "model-b"]
+        );
+    }
+
+    #[test]
+    fn normalizes_and_persists_custom_providers() {
+        let provider = normalize_custom_provider(CustomProviderConfig {
+            id: String::new(),
+            name: "  Company Gateway  ".to_string(),
+            base_url: "https://gateway.example.com/v1/".to_string(),
+            api_style: "chat_completions".to_string(),
+            models: vec![CustomProviderModel {
+                id: "internal-model".to_string(),
+                name: Some("Internal".to_string()),
+            }],
+        })
+        .unwrap();
+        assert!(provider.id.starts_with("custom:"));
+        assert_eq!(provider.name, "Company Gateway");
+        assert_eq!(provider.base_url, "https://gateway.example.com/v1");
+
+        let path = std::env::temp_dir().join(format!(
+            "plex-custom-providers-{}.json",
+            unix_millis()
+        ));
+        write_custom_providers_to_path(&path, &[provider.clone()]).unwrap();
+        let loaded = read_custom_providers_from_path(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, provider.id);
+        assert_eq!(loaded[0].models[0].id, "internal-model");
+        let _ = std::fs::remove_file(path);
+
+        let invalid = normalize_custom_provider(CustomProviderConfig {
+            id: "custom:x".to_string(),
+            name: "Bad".to_string(),
+            base_url: "ftp://example.com".to_string(),
+            api_style: "chat_completions".to_string(),
+            models: vec![],
+        });
+        assert!(invalid.is_err());
     }
 
     #[test]

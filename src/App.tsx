@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { sidecar } from "./api";
 import {
+  customProvidersToCatalog,
   defaultEffort,
   findModel,
   findProvider,
   normalizeCatalog,
   sortProviders,
   type CatalogProvider,
+  type CustomProviderConfig,
 } from "./catalog";
 import {
   ModelPicker,
@@ -399,6 +401,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [providers, setProviders] = useState<CatalogProvider[]>([]);
+  const [customProviders, setCustomProviders] = useState<
+    CustomProviderConfig[]
+  >([]);
   const [keyStates, setKeyStates] = useState<
     Record<string, ProviderKeyState>
   >({});
@@ -434,7 +439,12 @@ export default function App() {
     async (catalog: CatalogProvider[], providerId?: string) => {
       const targets = providerId
         ? catalog.filter((provider) => provider.id === providerId)
-        : catalog.filter((provider) => provider.supported).slice(0, 24);
+        : catalog
+            .filter(
+              (provider) =>
+                provider.source === "custom" || provider.supported,
+            )
+            .slice(0, 40);
       if (targets.length === 0) {
         return;
       }
@@ -462,8 +472,15 @@ export default function App() {
 
   const loadCatalog = useCallback(
     async (forceRefresh = false) => {
-      const response = await sidecar.modelsCatalog(forceRefresh);
-      const catalog = sortProviders(normalizeCatalog(response.catalog));
+      const [response, customs] = await Promise.all([
+        sidecar.modelsCatalog(forceRefresh),
+        sidecar.listCustomProviders(),
+      ]);
+      setCustomProviders(customs);
+      const catalog = sortProviders([
+        ...customProvidersToCatalog(customs),
+        ...normalizeCatalog(response.catalog),
+      ]);
       setProviders(catalog);
       setCatalogSource(response.source);
       setFetchedAtUnix(response.fetchedAtUnix);
@@ -649,8 +666,7 @@ export default function App() {
           id: provider.id,
           name: provider.name,
           baseUrl:
-            provider.api ??
-            (provider.id === "openai" ? "https://api.openai.com/v1" : ""),
+            provider.baseUrl,
           apiStyle: provider.apiStyle,
           modelId: model.id,
           reasoningEffort: selection?.effort ?? null,
@@ -705,6 +721,23 @@ export default function App() {
     await sidecar.deleteProviderKey(providerId);
     await refreshKeyStates(providers, providerId);
   };
+
+  const saveCustomProvider = async (provider: CustomProviderConfig) => {
+    const saved = await sidecar.saveCustomProvider(provider);
+    await loadCatalog(false);
+    return saved;
+  };
+
+  const deleteCustomProvider = async (providerId: string) => {
+    await sidecar.deleteCustomProvider(providerId);
+    await loadCatalog(false);
+  };
+
+  const fetchProviderModels = async (input: {
+    baseUrl: string;
+    providerId?: string;
+    apiKey?: string;
+  }) => sidecar.fetchProviderModels(input);
 
   const selectedProvider = findProvider(
     providers,
@@ -892,11 +925,15 @@ export default function App() {
       {settingsOpen ? (
         <ProviderSettings
           providers={providers}
+          customProviders={customProviders}
           keyStates={keyStates}
           catalogSource={catalogSource}
           fetchedAtUnix={fetchedAtUnix}
           onSave={saveProviderKey}
           onDelete={deleteProviderKey}
+          onSaveCustom={saveCustomProvider}
+          onDeleteCustom={deleteCustomProvider}
+          onFetchModels={fetchProviderModels}
           onRefresh={() => loadCatalog(true)}
           onClose={() => setSettingsOpen(false)}
         />

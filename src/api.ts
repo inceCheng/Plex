@@ -6,6 +6,10 @@ import type {
   TaskDetail,
   TaskRecord,
 } from "./types";
+import type {
+  CustomProviderConfig,
+  CustomProviderModel,
+} from "./catalog";
 
 type MessageHandler = (message: SidecarMessage) => void;
 
@@ -144,6 +148,32 @@ export class SidecarClient {
 
   async deleteProviderKey(providerId: string): Promise<void> {
     await invoke("delete_provider_key", { providerId });
+  }
+
+  async listCustomProviders(): Promise<CustomProviderConfig[]> {
+    return invoke("list_custom_providers");
+  }
+
+  async saveCustomProvider(
+    provider: CustomProviderConfig,
+  ): Promise<CustomProviderConfig> {
+    return invoke("save_custom_provider", { provider });
+  }
+
+  async deleteCustomProvider(providerId: string): Promise<void> {
+    await invoke("delete_custom_provider", { providerId });
+  }
+
+  async fetchProviderModels(input: {
+    baseUrl: string;
+    providerId?: string;
+    apiKey?: string;
+  }): Promise<CustomProviderModel[]> {
+    return invoke("fetch_provider_models", {
+      baseUrl: input.baseUrl,
+      providerId: input.providerId,
+      apiKey: input.apiKey,
+    });
   }
 
   async approve(taskId: string, callId: string): Promise<void> {
