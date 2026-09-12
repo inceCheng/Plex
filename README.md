@@ -123,3 +123,11 @@ OPENROUTER_API_KEY=sk-or-... bun run tauri dev
 - 审批暂停状态保存在 Sidecar 内存中，应用重启后只保留历史记录，不能继续原审批。
 - 已取消任务的模型请求依赖 SDK 的 `AbortSignal` 支持；真实网络请求下的取消行为仍待实测。
 - 安装包、签名、公证和 Windows/Linux 分发尚未验证。
+
+## 开源协议
+
+Copyright 2026 inceCheng
+
+Plex 采用 [Apache License 2.0](LICENSE) 开源协议。除另有说明的第三方内容外，本仓库代码按该协议提供；依赖及第三方内容仍遵循各自的许可证。
+
+项目仓库：[inceCheng/Plex](https://github.com/inceCheng/Plex)。

@@ -2,6 +2,7 @@
 name = "plex"
 version = "0.1.0"
 description = "A local-first desktop agent"
+license = "Apache-2.0"
 authors = ["Plex"]
 edition = "2021"
 

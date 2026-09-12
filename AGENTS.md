@@ -14,6 +14,7 @@
 ## 产品目标与已确认方向
 
 - 项目名称：Plex。
+- 用户已确认将 GitHub 仓库 `inceCheng/Plex` 公开，并采用 Apache License 2.0；根目录 `LICENSE` 保存官方完整协议，README 和项目元数据同步声明 `Apache-2.0`。
 - 项目目录：`/Volumes/AppleDrive/dev/Plex`。
 - 用户希望使用 Tauri 与 OpenAI Agents SDK 构建通用桌面 Agent。
 - 用户已明确选择 Bun 作为 JavaScript/TypeScript 的统一工具链与 Agent 运行时，覆盖依赖管理、脚本、测试和构建；Sidecar 使用 Bun。
